@@ -40,7 +40,13 @@ def validate_candidate_output(data: Any, source_id: str) -> list[dict[str, Any]]
 
 
 def validate_notebook_request(data: dict[str, Any]) -> None:
-    require_keys(data, {"request_id", "story_id", "source_url", "output_dir"}, "notebook request")
+    require_keys(data, {"request_id", "story_id", "story", "output_dir"}, "notebook request")
+    if not isinstance(data["story"], dict):
+        raise ValueError("notebook request story must be object")
+    require_keys(data["story"], REQUIRED_CANDIDATE, "notebook request story")
+    extra = set(data["story"]) - REQUIRED_CANDIDATE
+    if extra:
+        raise ValueError(f"notebook request story has unsupported keys: {', '.join(sorted(extra))}")
 
 
 def validate_notebook_receipt(data: dict[str, Any]) -> None:

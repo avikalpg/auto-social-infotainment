@@ -19,7 +19,7 @@ NotebookLM rule: production video generation must run through an HP-local Playwr
 ## Commands
 
 ```bash
-workflow-automation extract-stories --source-id SRC-001 [--dry-run]
+workflow-automation extract-candidate-pairs --source-id SRC-001 [--dry-run]
 workflow-automation produce-video [--story-id ID] [--dry-run]
 workflow-automation publish-instagram [--story-id ID] [--dry-run]
 workflow-automation publish-x [--story-id ID] [--dry-run]
@@ -51,8 +51,8 @@ This slice is deterministic and does not perform live browser posting. Configure
 
 Key commands:
 
-- `workflow-automation extract-stories --source-id <id>`: invokes the configured source extractor adapter. The adapter must print strict JSON: `{ "candidate_stories": [{ "id", "title", "source_id", "source_url", ... }] }`. Candidates are stored as pending approval and are not appended to the stories tracker.
-- `workflow-automation approve-source --source-id <id>`: explicit approval gate. Atomically appends new candidate stories to the configured stories tracker and is idempotent by story id.
+- `workflow-automation extract-candidate-pairs --source-id <id>`: invokes the configured source extractor adapter. The adapter must print strict JSON: `{ "candidate_stories": [{ "main_character": "...", "primary_tension": "..." }] }`. Each candidate may contain only those two fields. Do not generate arc, resolution, supporting details, script, or a full story at this stage. Candidates are stored as pending human approval and are not appended to the stories tracker.
+- `workflow-automation approve-candidate-pairs --source-id <id>`: explicit human approval gate. Atomically appends new approved `main_character` + `primary_tension` pairs to the configured stories tracker and is idempotent by source/pair.
 - Publisher completion requires a receipt containing `platform`, `status: published`, `public_url`, `timestamp`, and `verification_evidence` before a package status can mark that platform published.
 
 Notebook worker contracts are JSON request/receipt files. Receipts must be `done` and include at least `audio_path` and `transcript_path` artifacts.

@@ -12,7 +12,10 @@ def write_worker_request(path: Path, story: dict[str, Any], output_dir: Path) ->
         'schema_version': 1,
         'request_id': f"notebook-{story['id']}",
         'story_id': str(story['id']),
-        'source_url': str(story['source_url']),
+        'story': {
+            'main_character': str(story['main_character']),
+            'primary_tension': str(story['primary_tension']),
+        },
         'output_dir': str(output_dir),
         'timestamp': utcnow(),
     }

@@ -7,6 +7,7 @@ from .errors import ExitCode
 from .jsonlog import configure
 from .lock import FileLock, LockError
 from .runner import run_stage
+from .extraction import extract_candidates, approve_candidates
 from .state import STAGES, StateStore, StoryState, utcnow
 from .tracker import find_source, select_next_story, story_id
 
@@ -42,7 +43,7 @@ def command_stage(args: argparse.Namespace, cfg: Config) -> int:
         LOG.exception("stage failed", extra={"stage": stage})
         return ExitCode.SUBPROCESS
 
-def extract_stories(args: argparse.Namespace, cfg: Config) -> int:
+def extract_candidate_pairs(args: argparse.Namespace, cfg: Config) -> int:
     errors = cfg.validate()
     if errors:
         print(json.dumps({"errors": errors}), file=sys.stderr)
@@ -52,22 +53,35 @@ def extract_stories(args: argparse.Namespace, cfg: Config) -> int:
     try:
         with FileLock(cfg.lock_path):
             source = find_source(cfg.sources_path, args.source_id)
-            state = store.load(state_id) or StoryState(story_id=state_id, source=source)
-            run_stage(state, "extracted", cfg, args.dry_run)
-            store.save(state)
-            print(json.dumps({"source_id": args.source_id, "stage": "stories_extracted", "status": state.stages["extracted"].status}))
+            state = extract_candidates(source, cfg, args.dry_run)
+            store.save(StoryState(story_id=state_id, source=state.to_json()))
+            print(json.dumps({"source_id": args.source_id, "stage": "candidate_pairs_extracted", "status": state.extraction.status, "candidates": len(state.candidate_stories)}))
             return ExitCode.OK
     except LockError as e:
         print(str(e), file=sys.stderr)
         return ExitCode.LOCKED
     except Exception as e:
         if "state" in locals():
-            state.stages["extracted"].status = "failed"
-            state.stages["extracted"].error = str(e)
-            state.stages["extracted"].updated_at = utcnow()
-            store.save(state)
+            state.extraction.status = "failed"
+            state.extraction.error = str(e)
+            state.extraction.updated_at = utcnow()
+            store.save(StoryState(story_id=state_id, source=state.to_json()))
         LOG.exception("story extraction failed", extra={"source_id": args.source_id})
         return ExitCode.SUBPROCESS
+
+def approve_candidate_pairs(args: argparse.Namespace, cfg: Config) -> int:
+    store = StateStore(cfg.state_dir / "sources")
+    state_id = f"source--{args.source_id}"
+    raw = store.load(state_id)
+    if not raw:
+        print(json.dumps({"missing": state_id}), file=sys.stderr); return ExitCode.CONFIG
+    from .state import SourceState
+    source_state = SourceState.from_json(raw.source)
+    with FileLock(cfg.lock_path):
+        appended = approve_candidates(source_state, cfg.stories_path)
+        store.save(StoryState(story_id=state_id, source=source_state.to_json()))
+    print(json.dumps({"source_id": args.source_id, "approved": True, "appended": appended}))
+    return ExitCode.OK
 
 def status(args: argparse.Namespace, cfg: Config) -> int:
     store = StateStore(cfg.state_dir)
@@ -89,14 +103,16 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="workflow-automation")
     p.add_argument("--config", type=Path); p.add_argument("--dry-run", action="store_true"); p.add_argument("--verbose", action="store_true")
     sub = p.add_subparsers(dest="command", required=True)
-    sp = sub.add_parser("extract-stories"); sp.add_argument("--source-id", required=True)
+    sp = sub.add_parser("extract-candidate-pairs", help="Run configured source extractor and write pending main_character/primary_tension candidate pairs"); sp.add_argument("--source-id", required=True)
+    sp = sub.add_parser("approve-candidate-pairs", help="Human-approve extracted candidate pairs and atomically append them to stories tracker"); sp.add_argument("--source-id", required=True)
     for c in CMD_STAGE: sp = sub.add_parser(c); sp.add_argument("--story-id")
     sp = sub.add_parser("status"); sp.add_argument("--story-id")
     sp = sub.add_parser("resume"); sp.add_argument("--story-id")
     args = p.parse_args(argv); configure(args.verbose); cfg = Config.load(args.config)
     if args.command == "status": return int(status(args, cfg))
     if args.command == "resume": return int(resume(args, cfg))
-    if args.command == "extract-stories": return int(extract_stories(args, cfg))
+    if args.command == "extract-candidate-pairs": return int(extract_candidate_pairs(args, cfg))
+    if args.command == "approve-candidate-pairs": return int(approve_candidate_pairs(args, cfg))
     return int(command_stage(args, cfg))
 
 if __name__ == "__main__": raise SystemExit(main())

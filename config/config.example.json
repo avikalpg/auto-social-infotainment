@@ -1,0 +1,15 @@
+{
+  "project_root": "/path/to/social-content",
+  "sources_path": "/path/to/social-content/data/sources.json",
+  "stories_path": "/path/to/social-content/data/stories.json",
+  "content_root": "/path/to/content-pipeline",
+  "state_dir": "/path/to/auto-social-infotainment/state",
+  "lock_path": "/path/to/auto-social-infotainment/state/workflow.lock",
+  "ffprobe_bin": "ffprobe",
+  "max_retries": 3,
+  "notebooklm_worker_cmd": ["ssh", "browser-worker", "workflow-notebooklm-worker"],
+  "instagram_cmd": null,
+  "x_cmd": null,
+  "youtube_cmd": null,
+  "linkedin_cmd": null
+}

@@ -27,6 +27,24 @@ def load_stories(path: Path) -> list[dict[str, Any]]:
     raise ValueError(f"unsupported stories schema in {path}")
 
 
+def load_sources(path: Path) -> list[dict[str, Any]]:
+    data = _read_json(path)
+    if isinstance(data, list):
+        return [dict(x) for x in data]
+    if isinstance(data, dict):
+        for key in ("sources", "items"):
+            if isinstance(data.get(key), list):
+                return [dict(x) for x in data[key]]
+    raise ValueError(f"unsupported sources schema in {path}")
+
+
+def find_source(path: Path, source_id: str) -> dict[str, Any]:
+    for source in load_sources(path):
+        if str(source.get("id") or source.get("source_id")) == source_id:
+            return source
+    raise LookupError(f"source not found: {source_id}")
+
+
 def select_next_story(stories_path: Path, state_dir: Path) -> dict[str, Any]:
     for story in load_stories(stories_path):
         sid = story_id(story)

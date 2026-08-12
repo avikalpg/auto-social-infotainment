@@ -19,7 +19,7 @@ NotebookLM rule: production video generation must run through an HP-local Playwr
 ## Commands
 
 ```bash
-workflow-automation extract-story [--story-id ID] [--dry-run]
+workflow-automation extract-stories --source-id SRC-001 [--dry-run]
 workflow-automation produce-video [--story-id ID] [--dry-run]
 workflow-automation publish-instagram [--story-id ID] [--dry-run]
 workflow-automation publish-x [--story-id ID] [--dry-run]

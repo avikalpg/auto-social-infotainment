@@ -3,7 +3,7 @@ import json
 import tempfile
 import unittest
 from workflow_automation.state import StateStore, StoryState
-from workflow_automation.tracker import select_next_story
+from workflow_automation.tracker import find_source, select_next_story
 from workflow_automation.media import verify_audio_hash
 
 class StateTrackerTests(unittest.TestCase):
@@ -29,6 +29,14 @@ class StateTrackerTests(unittest.TestCase):
                 rec.status = "done"
             store.save(st)
             self.assertEqual(select_next_story(stories, store.state_dir)["id"], "b")
+
+    def test_find_source_by_source_id(self):
+        with tempfile.TemporaryDirectory() as d:
+            sources = Path(d) / "sources.json"
+            sources.write_text(json.dumps({"sources": [{"id": "SRC-001"}, {"id": "SRC-002"}]}))
+            self.assertEqual(find_source(sources, "SRC-002")["id"], "SRC-002")
+            with self.assertRaises(LookupError):
+                find_source(sources, "SRC-999")
 
     def test_audio_hash(self):
         with tempfile.TemporaryDirectory() as d:

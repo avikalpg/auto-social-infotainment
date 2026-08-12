@@ -8,10 +8,10 @@ from .jsonlog import configure
 from .lock import FileLock, LockError
 from .runner import run_stage
 from .state import STAGES, StateStore, StoryState, utcnow
-from .tracker import select_next_story, story_id
+from .tracker import find_source, select_next_story, story_id
 
 LOG = logging.getLogger("workflow_automation")
-CMD_STAGE = {"extract-story": "extracted", "produce-video": "video_produced", "publish-instagram": "instagram_published", "publish-x": "x_published", "publish-youtube": "youtube_published", "publish-linkedin": "linkedin_published"}
+CMD_STAGE = {"produce-video": "video_produced", "publish-instagram": "instagram_published", "publish-x": "x_published", "publish-youtube": "youtube_published", "publish-linkedin": "linkedin_published"}
 
 def load_or_create(store: StateStore, cfg: Config, sid: str | None) -> StoryState:
     if sid:
@@ -42,6 +42,33 @@ def command_stage(args: argparse.Namespace, cfg: Config) -> int:
         LOG.exception("stage failed", extra={"stage": stage})
         return ExitCode.SUBPROCESS
 
+def extract_stories(args: argparse.Namespace, cfg: Config) -> int:
+    errors = cfg.validate()
+    if errors:
+        print(json.dumps({"errors": errors}), file=sys.stderr)
+        return ExitCode.CONFIG
+    store = StateStore(cfg.state_dir / "sources")
+    state_id = f"source--{args.source_id}"
+    try:
+        with FileLock(cfg.lock_path):
+            source = find_source(cfg.sources_path, args.source_id)
+            state = store.load(state_id) or StoryState(story_id=state_id, source=source)
+            run_stage(state, "extracted", cfg, args.dry_run)
+            store.save(state)
+            print(json.dumps({"source_id": args.source_id, "stage": "stories_extracted", "status": state.stages["extracted"].status}))
+            return ExitCode.OK
+    except LockError as e:
+        print(str(e), file=sys.stderr)
+        return ExitCode.LOCKED
+    except Exception as e:
+        if "state" in locals():
+            state.stages["extracted"].status = "failed"
+            state.stages["extracted"].error = str(e)
+            state.stages["extracted"].updated_at = utcnow()
+            store.save(state)
+        LOG.exception("story extraction failed", extra={"source_id": args.source_id})
+        return ExitCode.SUBPROCESS
+
 def status(args: argparse.Namespace, cfg: Config) -> int:
     store = StateStore(cfg.state_dir)
     if args.story_id:
@@ -62,12 +89,14 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="workflow-automation")
     p.add_argument("--config", type=Path); p.add_argument("--dry-run", action="store_true"); p.add_argument("--verbose", action="store_true")
     sub = p.add_subparsers(dest="command", required=True)
+    sp = sub.add_parser("extract-stories"); sp.add_argument("--source-id", required=True)
     for c in CMD_STAGE: sp = sub.add_parser(c); sp.add_argument("--story-id")
     sp = sub.add_parser("status"); sp.add_argument("--story-id")
     sp = sub.add_parser("resume"); sp.add_argument("--story-id")
     args = p.parse_args(argv); configure(args.verbose); cfg = Config.load(args.config)
     if args.command == "status": return int(status(args, cfg))
     if args.command == "resume": return int(resume(args, cfg))
+    if args.command == "extract-stories": return int(extract_stories(args, cfg))
     return int(command_stage(args, cfg))
 
 if __name__ == "__main__": raise SystemExit(main())

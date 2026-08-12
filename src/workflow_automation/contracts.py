@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any
 import json
 
-REQUIRED_CANDIDATE = {"id", "title", "source_id", "source_url"}
+REQUIRED_CANDIDATE = {"main_character", "primary_tension"}
 
 
 def load_json(path: Path) -> Any:
@@ -21,13 +21,16 @@ def validate_candidate_story(story: dict[str, Any], source_id: str) -> dict[str,
     if not isinstance(story, dict):
         raise ValueError("candidate story must be object")
     require_keys(story, REQUIRED_CANDIDATE, "candidate story")
-    if str(story["source_id"]) != source_id:
-        raise ValueError("candidate story source_id mismatch")
-    allowed = {"id", "title", "summary", "source_id", "source_url", "published_at", "metadata"}
-    extra = set(story) - allowed
+    extra = set(story) - REQUIRED_CANDIDATE
     if extra:
-        raise ValueError(f"candidate story has unsupported keys: {', '.join(sorted(extra))}")
-    return dict(story)
+        raise ValueError(
+            "candidate story may contain only main_character and primary_tension; "
+            f"unsupported keys: {', '.join(sorted(extra))}"
+        )
+    return {
+        "main_character": str(story["main_character"]).strip(),
+        "primary_tension": str(story["primary_tension"]).strip(),
+    }
 
 
 def validate_candidate_output(data: Any, source_id: str) -> list[dict[str, Any]]:

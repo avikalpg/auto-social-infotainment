@@ -31,7 +31,7 @@ def extract_candidates(source: dict[str, Any], cfg: Config, dry_run: bool = Fals
     state.extraction.attempts += 1
     state.extraction.updated_at = utcnow()
     if dry_run:
-        candidates = [{"id": f"{source_id}-candidate", "title": "Generic candidate story", "source_id": source_id, "source_url": str(source.get("url", "https://example.invalid/source")), "summary": "Dry-run candidate."}]
+        candidates = [{"main_character": "A generic protagonist", "primary_tension": "A consequential obstacle"}]
     else:
         result = CommandAdapter("source extractor", cfg.extractor_cmd).run(["extract", "--source-id", source_id], False)
         candidates = validate_candidate_output(json.loads(str(result.get("stdout") or "")), source_id)
@@ -41,15 +41,40 @@ def extract_candidates(source: dict[str, Any], cfg: Config, dry_run: bool = Fals
     return state
 
 
+def _next_story_id(existing: list[dict[str, Any]]) -> str:
+    numbers = []
+    for story in existing:
+        sid = str(story.get("id", ""))
+        if sid.startswith("STR-") and sid[4:].isdigit():
+            numbers.append(int(sid[4:]))
+    return f"STR-{max(numbers, default=0) + 1:03d}"
+
+
 def approve_candidates(source_state: SourceState, stories_path: Path) -> int:
     existing = load_stories(stories_path) if stories_path.exists() else []
-    ids = {story_id(s) for s in existing}
+    existing_pairs = {
+        (str(s.get("source_id", "")), str(s.get("main_character", "")), str(s.get("primary_tension", "")))
+        for s in existing
+    }
     appended = 0
-    for c in source_state.candidate_stories:
-        if story_id(c) not in ids:
-            existing.append(c)
-            ids.add(story_id(c))
-            appended += 1
+    for candidate in source_state.candidate_stories:
+        pair = (
+            source_state.source_id,
+            str(candidate["main_character"]),
+            str(candidate["primary_tension"]),
+        )
+        if pair in existing_pairs:
+            continue
+        story = {
+            "id": _next_story_id(existing),
+            "source_id": source_state.source_id,
+            "main_character": pair[1],
+            "primary_tension": pair[2],
+            "status": "pending",
+        }
+        existing.append(story)
+        existing_pairs.add(pair)
+        appended += 1
     atomic_write_json(stories_path, {"stories": existing})
     source_state.extraction.status = "approved"
     source_state.extraction.updated_at = utcnow()

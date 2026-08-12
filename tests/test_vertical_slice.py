@@ -15,13 +15,19 @@ class VerticalSliceTests(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         stories_path = Path(tmp.name) / "stories.json"
         stories_path.write_text(json.dumps({"stories": []}))
-        data = {"candidate_stories": [{"id": "story-001", "title": "Generic story", "source_id": "source-001", "source_url": "https://example.invalid/item"}]}
+        data = {"candidate_stories": [{"main_character": "A field engineer", "primary_tension": "A safety mechanism conflicts with delivery pressure"}]}
         candidates = validate_candidate_output(data, "source-001")
         ss = SourceState("source-001", candidate_stories=candidates)
         self.assertEqual(approve_candidates(ss, stories_path), 1)
         self.assertEqual(approve_candidates(ss, stories_path), 0)
-        self.assertEqual(len(json.loads(stories_path.read_text())["stories"]), 1)
+        committed = json.loads(stories_path.read_text())["stories"]
+        self.assertEqual(len(committed), 1)
+        self.assertEqual(committed[0]["id"], "STR-001")
+        self.assertEqual(committed[0]["source_id"], "source-001")
+        self.assertEqual(set(candidates[0]), {"main_character", "primary_tension"})
         self.assertEqual(ss.extraction.status, "approved")
+        with self.assertRaises(ValueError):
+            validate_candidate_output({"candidate_stories": [{"main_character": "A", "primary_tension": "B", "resolution": "C"}]}, "source-001")
 
     def test_notebook_contracts(self):
         tmp = tempfile.TemporaryDirectory()

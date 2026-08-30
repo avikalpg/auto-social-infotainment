@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
-import json
 
 REQUIRED_CANDIDATE = {"main_character", "primary_tension"}
 
@@ -19,7 +19,7 @@ def require_keys(obj: dict[str, Any], keys: set[str], label: str) -> None:
 
 def validate_candidate_story(story: dict[str, Any], source_id: str) -> dict[str, Any]:
     if not isinstance(story, dict):
-        raise ValueError("candidate story must be object")
+        raise TypeError("candidate story must be object")
     require_keys(story, REQUIRED_CANDIDATE, "candidate story")
     extra = set(story) - REQUIRED_CANDIDATE
     if extra:
@@ -35,32 +35,70 @@ def validate_candidate_story(story: dict[str, Any], source_id: str) -> dict[str,
 
 def validate_candidate_output(data: Any, source_id: str) -> list[dict[str, Any]]:
     if not isinstance(data, dict) or not isinstance(data.get("candidate_stories"), list):
-        raise ValueError("extractor output must be object with candidate_stories list")
+        raise TypeError("extractor output must be object with candidate_stories list")
     return [validate_candidate_story(x, source_id) for x in data["candidate_stories"]]
 
 
 def validate_notebook_request(data: dict[str, Any]) -> None:
-    require_keys(data, {"request_id", "story_id", "story", "output_dir"}, "notebook request")
-    if not isinstance(data["story"], dict):
-        raise ValueError("notebook request story must be object")
-    require_keys(data["story"], REQUIRED_CANDIDATE, "notebook request story")
-    extra = set(data["story"]) - REQUIRED_CANDIDATE
+    allowed = {
+        "schema_version",
+        "request_id",
+        "story_id",
+        "notebook_url",
+        "artifact_title",
+        "expected_format",
+        "expected_duration_seconds",
+        "output_path",
+        "receipt_path",
+        "allow_root",
+        "cdp_url",
+        "ffprobe_bin",
+        "timestamp",
+    }
+    require_keys(
+        data,
+        {"request_id", "story_id", "notebook_url", "artifact_title", "output_path"},
+        "notebook download request",
+    )
+    extra = set(data) - allowed
     if extra:
-        raise ValueError(f"notebook request story has unsupported keys: {', '.join(sorted(extra))}")
+        raise ValueError(
+            f"notebook download request has unsupported keys: {', '.join(sorted(extra))}"
+        )
+    if not str(data["notebook_url"]).startswith("https://notebook.google.com/"):
+        raise ValueError("notebook_url must be a NotebookLM URL")
+    if "expected_duration_seconds" in data and not isinstance(
+        data["expected_duration_seconds"], (int, float)
+    ):
+        raise ValueError("expected_duration_seconds must be numeric")
 
 
 def validate_notebook_receipt(data: dict[str, Any]) -> None:
-    require_keys(data, {"request_id", "story_id", "status", "timestamp", "artifacts"}, "notebook receipt")
+    require_keys(
+        data,
+        {"request_id", "story_id", "status", "artifact", "evidence"},
+        "notebook download receipt",
+    )
     if data["status"] != "done":
-        raise ValueError("notebook receipt status must be done")
-    arts = data["artifacts"]
-    if not isinstance(arts, dict):
-        raise ValueError("notebook receipt artifacts must be object")
-    require_keys(arts, {"audio_path", "transcript_path"}, "notebook artifacts")
+        raise ValueError("notebook download receipt status must be done")
+    artifact = data["artifact"]
+    if not isinstance(artifact, dict):
+        raise TypeError("notebook download receipt artifact must be object")
+    require_keys(
+        artifact,
+        {"size_bytes", "container", "duration_seconds", "dimensions", "codecs", "sha256"},
+        "notebook artifact",
+    )
+    if not isinstance(data["evidence"], dict):
+        raise TypeError("notebook download receipt evidence must be object")
 
 
 def validate_publication_receipt(data: dict[str, Any]) -> None:
-    require_keys(data, {"platform", "status", "public_url", "timestamp", "verification_evidence"}, "publisher receipt")
+    require_keys(
+        data,
+        {"platform", "status", "public_url", "timestamp", "verification_evidence"},
+        "publisher receipt",
+    )
     if data["status"] != "published":
         raise ValueError("publisher receipt status must be published")
     if not str(data["public_url"]).startswith(("https://", "http://")):

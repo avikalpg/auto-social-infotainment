@@ -1,12 +1,20 @@
-from pathlib import Path
 import json
 import tempfile
 import unittest
-from workflow_automation.state import StateStore, StoryState
-from workflow_automation.tracker import find_source, select_next_story
+from pathlib import Path
+
 from workflow_automation.media import verify_audio_hash
+from workflow_automation.state import StateStore, StoryState
+from workflow_automation.tracker import find_source, find_story, select_next_story
+
 
 class StateTrackerTests(unittest.TestCase):
+    def test_find_story_by_explicit_id(self):
+        with tempfile.TemporaryDirectory() as d:
+            stories = Path(d) / "stories.json"
+            stories.write_text(json.dumps({"stories": [{"id": "STR-008", "status": "pending"}]}))
+            self.assertEqual(find_story(stories, "STR-008")["status"], "pending")
+
     def test_state_atomic_save_backup(self):
         with tempfile.TemporaryDirectory() as d:
             tmp_path = Path(d)
@@ -45,6 +53,7 @@ class StateTrackerTests(unittest.TestCase):
             got = verify_audio_hash(p, None)
             self.assertTrue(got["matches"])
             self.assertEqual(len(got["sha256"]), 64)
+
 
 if __name__ == "__main__":
     unittest.main()

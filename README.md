@@ -16,6 +16,15 @@ Production-grade Python 3.11+ foundation for the social-content workflow.
 
 NotebookLM rule: production video generation must run through an HP-local Playwright worker. Azure-side code must never download NotebookLM assets. When replacing outros, preserve the source audio byte-for-byte and verify hashes.
 
+### Source-level NotebookLM lifecycle
+
+- Use one NotebookLM notebook per source, not one notebook per story.
+- Create and index the notebook as soon as a source is selected.
+- After the source's candidate stories are verified and approved, queue one independently prompted Short Video Overview for every approved story in that same notebook.
+- Confirm each generation has actually entered the queue before starting the next one; NotebookLM may not accept concurrent starts reliably.
+- Keep story-level request/receipt tracking (`STR-*`), artifact titles, factual review, downloads, outro replacement, packaging, and publication independent.
+- Create a separate notebook only when a story requires a materially different or expanded source set.
+
 ## Commands
 
 ```bash

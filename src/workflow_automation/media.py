@@ -1,9 +1,10 @@
 from __future__ import annotations
-from pathlib import Path
+
 import hashlib
 import json
 import subprocess
 import tempfile
+from pathlib import Path
 
 
 def sha256_file(path: Path) -> str:
@@ -18,10 +19,18 @@ def ffprobe_validate(path: Path, ffprobe_bin: str = "ffprobe") -> dict[str, obje
     if not path.exists():
         raise ValueError(f"media does not exist: {path}")
     proc = subprocess.run(
-        [ffprobe_bin, "-v", "error", "-print_format", "json", "-show_format", "-show_streams", str(path)],
+        [
+            ffprobe_bin,
+            "-v",
+            "error",
+            "-print_format",
+            "json",
+            "-show_format",
+            "-show_streams",
+            str(path),
+        ],
         text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         check=False,
     )
     if proc.returncode != 0:
@@ -58,16 +67,19 @@ def canonical_pcm_sha256(path: Path, ffmpeg_bin: str = "ffmpeg") -> str:
             "48000",
             "-",
         ],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         check=False,
     )
     if proc.returncode != 0:
-        raise RuntimeError(f"ffmpeg audio extraction failed for {path}: {proc.stderr.decode(errors='replace').strip()}")
+        raise RuntimeError(
+            f"ffmpeg audio extraction failed for {path}: {proc.stderr.decode(errors='replace').strip()}"
+        )
     return hashlib.sha256(proc.stdout).hexdigest()
 
 
-def verify_canonical_pcm_equal(original: Path, final: Path, ffmpeg_bin: str = "ffmpeg") -> dict[str, object]:
+def verify_canonical_pcm_equal(
+    original: Path, final: Path, ffmpeg_bin: str = "ffmpeg"
+) -> dict[str, object]:
     original_sha = canonical_pcm_sha256(original, ffmpeg_bin)
     final_sha = canonical_pcm_sha256(final, ffmpeg_bin)
     if original_sha != final_sha:
@@ -91,7 +103,9 @@ def replace_outro_visuals_preserve_audio(
     ffprobe_validate(original_video, ffprobe_bin)
     ffprobe_validate(replacement_visual_video, ffprobe_bin)
     output_video.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(dir=output_video.parent, suffix=output_video.suffix or ".mp4", delete=False) as f:
+    with tempfile.NamedTemporaryFile(
+        dir=output_video.parent, suffix=output_video.suffix or ".mp4", delete=False
+    ) as f:
         tmp = Path(f.name)
     try:
         proc = subprocess.run(
@@ -118,8 +132,7 @@ def replace_outro_visuals_preserve_audio(
                 str(tmp),
             ],
             text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             check=False,
         )
         if proc.returncode != 0:

@@ -1,16 +1,20 @@
 from __future__ import annotations
-from pathlib import Path
+
 import os
+from pathlib import Path
+from typing import Self
+
 
 class LockError(RuntimeError):
     pass
+
 
 class FileLock:
     def __init__(self, path: Path):
         self.path = path
         self.fd: int | None = None
 
-    def __enter__(self) -> "FileLock":
+    def __enter__(self) -> Self:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         try:
             self.fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)

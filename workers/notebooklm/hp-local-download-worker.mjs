@@ -8,7 +8,11 @@ const REQUIRED = ['request_id','story_id','notebook_url','artifact_title','outpu
 const ALLOWED = new Set(['schema_version',...REQUIRED,'receipt_path','expected_format','expected_duration_seconds','cdp_url','ffprobe_bin','timestamp']);
 const fail = (message) => { throw new Error(message); };
 const inside = (child, root) => { const rel=path.relative(path.resolve(root),path.resolve(child)); return rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel); };
-async function atomicJson(file, value) { await fs.mkdir(path.dirname(file),{recursive:true}); const tmp=`${file}.${process.pid}.tmp`; await fs.writeFile(tmp,JSON.stringify(value,null,2)+'\n'); await fs.rename(tmp,file); }
+async function atomicJson(file, value) {
+ const dir=path.dirname(file); await fs.mkdir(dir,{recursive:true}); const tmp=path.join(dir,`.${path.basename(file)}.${process.pid}.${Date.now()}.tmp`); let handle;
+ try { handle=await fs.open(tmp,'wx',0o600); await handle.writeFile(JSON.stringify(value,null,2)+'\n'); await handle.sync(); await handle.close(); handle=undefined; await fs.rename(tmp,file); const dirHandle=await fs.open(dir,'r'); try { await dirHandle.sync(); } finally { await dirHandle.close(); } }
+ finally { await handle?.close().catch(()=>{}); await fs.unlink(tmp).catch(()=>{}); }
+}
 function run(bin,args){return new Promise((resolve,reject)=>{const p=spawn(bin,args);let out='',err='';p.stdout.on('data',d=>out+=d);p.stderr.on('data',d=>err+=d);p.on('error',reject);p.on('close',c=>c===0?resolve(out):reject(new Error(`${bin} failed rc=${c}: ${err.trim()}`)));});}
 async function sha256(file){const b=await fs.readFile(file);return crypto.createHash('sha256').update(b).digest('hex');}
 async function probe(file,bin='ffprobe'){

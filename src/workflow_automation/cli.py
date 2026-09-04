@@ -26,13 +26,26 @@ CMD_STAGE = {
 }
 
 
+def _hydrate_notebook_source(cfg: Config, story: dict[str, object]) -> dict[str, object]:
+    """Inherit source-level NotebookLM metadata without copying it into every story."""
+    hydrated = dict(story)
+    source_id = hydrated.get("source_id")
+    if source_id and not hydrated.get("notebook_url"):
+        source = find_source(cfg.sources_path, str(source_id))
+        if source.get("notebook_url"):
+            hydrated["notebook_url"] = source["notebook_url"]
+    return hydrated
+
+
 def load_or_create(store: StateStore, cfg: Config, sid: str | None) -> StoryState:
     if sid:
         state = store.load(sid)
         if state:
             return state
-        return StoryState(story_id=sid, source=find_story(cfg.stories_path, sid))
-    story = select_next_story(cfg.stories_path, cfg.state_dir)
+        return StoryState(
+            story_id=sid, source=_hydrate_notebook_source(cfg, find_story(cfg.stories_path, sid))
+        )
+    story = _hydrate_notebook_source(cfg, select_next_story(cfg.stories_path, cfg.state_dir))
     sid = story_id(story)
     return store.load(sid) or StoryState(story_id=sid, source=story)
 

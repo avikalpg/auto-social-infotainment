@@ -18,6 +18,7 @@ class Config:
     state_dir: Path
     lock_path: Path
     ffprobe_bin: str
+    ffmpeg_bin: str
     extractor_cmd: tuple[str, ...] | None
     notebooklm_worker_cmd: tuple[str, ...] | None
     instagram_cmd: tuple[str, ...] | None
@@ -27,6 +28,7 @@ class Config:
     notebooklm_request_dir: Path
     notebooklm_output_root: Path
     notebooklm_cdp_url: str | None = None
+    branded_outro_path: Path | None = None
     max_retries: int = 3
 
     @staticmethod
@@ -53,6 +55,7 @@ class Config:
             val("notebooklm_output_root", str(project_root / "downloads" / "notebooklm"))
         )
         cdp_url_raw = val("notebooklm_cdp_url", "")
+        branded_outro_raw = val("branded_outro_path", "")
         return Config(
             project_root,
             Path(val("sources_path", str(project_root / "data" / "sources.json"))),
@@ -61,6 +64,7 @@ class Config:
             state_dir,
             Path(val("lock_path", str(state_dir / "workflow.lock"))),
             val("ffprobe_bin", "ffprobe"),
+            val("ffmpeg_bin", "ffmpeg"),
             cmd("extractor"),
             cmd("notebooklm_worker"),
             cmd("instagram"),
@@ -70,6 +74,7 @@ class Config:
             request_dir,
             output_root,
             cdp_url_raw or None,
+            Path(branded_outro_raw) if branded_outro_raw else None,
             int(val("max_retries", "3")),
         )
 

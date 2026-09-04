@@ -84,7 +84,13 @@ def verify_canonical_pcm_equal(
     final_sha = canonical_pcm_sha256(final, ffmpeg_bin)
     if original_sha != final_sha:
         raise ValueError("canonical PCM audio SHA-256 mismatch after outro replacement")
-    return {"canonical_pcm_sha256": final_sha, "matches_original": True}
+    return {
+        "original_canonical_pcm_sha256": original_sha,
+        "final_canonical_pcm_sha256": final_sha,
+        # Retain this key for consumers of the original vertical-slice API.
+        "canonical_pcm_sha256": final_sha,
+        "matches_original": True,
+    }
 
 
 def replace_outro_visuals_preserve_audio(
@@ -141,6 +147,84 @@ def replace_outro_visuals_preserve_audio(
         media = ffprobe_validate(tmp, ffprobe_bin)
         tmp.replace(output_video)
         return {"output": str(output_video), "audio": verification, "media": media}
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
+def append_branded_outro_preserve_audio(
+    original_video: Path,
+    branded_outro_visual: Path,
+    output_video: Path,
+    ffmpeg_bin: str = "ffmpeg",
+    ffprobe_bin: str = "ffprobe",
+) -> dict[str, object]:
+    """Append a silent branded visual outro while stream-copying and verifying source audio.
+
+    The outro must be video-only. Keeping it silent lets the original audio track remain exactly
+    the original program audio rather than silently changing the audio editorially.
+    """
+    original_media = ffprobe_validate(original_video, ffprobe_bin)
+    outro_media = ffprobe_validate(branded_outro_visual, ffprobe_bin)
+    if any(stream.get("codec_type") == "audio" for stream in outro_media["streams"]):
+        raise ValueError("branded outro must be a silent visual asset")
+    original_video_stream = next(
+        stream for stream in original_media["streams"] if stream.get("codec_type") == "video"
+    )
+    outro_video_stream = next(
+        stream for stream in outro_media["streams"] if stream.get("codec_type") == "video"
+    )
+    if (
+        original_video_stream.get("width") != outro_video_stream.get("width")
+        or original_video_stream.get("height") != outro_video_stream.get("height")
+    ):
+        raise ValueError("branded outro dimensions must match the source video")
+
+    output_video.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        dir=output_video.parent, suffix=output_video.suffix or ".mp4", delete=False
+    ) as f:
+        tmp = Path(f.name)
+    try:
+        proc = subprocess.run(
+            [
+                ffmpeg_bin,
+                "-y",
+                "-v",
+                "error",
+                "-i",
+                str(original_video),
+                "-i",
+                str(branded_outro_visual),
+                "-filter_complex",
+                "[0:v:0][1:v:0]concat=n=2:v=1:a=0[v]",
+                "-map",
+                "[v]",
+                "-map",
+                "0:a:0",
+                "-c:v",
+                "libx264",
+                "-c:a",
+                "copy",
+                "-movflags",
+                "+faststart",
+                str(tmp),
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if proc.returncode != 0:
+            raise RuntimeError(f"ffmpeg branded outro append failed: {proc.stderr.strip()}")
+        verification = verify_canonical_pcm_equal(original_video, tmp, ffmpeg_bin)
+        media = ffprobe_validate(tmp, ffprobe_bin)
+        tmp.replace(output_video)
+        return {
+            "output": str(output_video),
+            "audio": verification,
+            "media": media,
+            "branded_outro": str(branded_outro_visual),
+        }
     except Exception:
         tmp.unlink(missing_ok=True)
         raise

@@ -2,7 +2,9 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
+from workflow_automation.cli import _hydrate_notebook_source
 from workflow_automation.media import verify_audio_hash
 from workflow_automation.state import StateStore, StoryState
 from workflow_automation.tracker import find_source, find_story, select_next_story
@@ -14,6 +16,26 @@ class StateTrackerTests(unittest.TestCase):
             stories = Path(d) / "stories.json"
             stories.write_text(json.dumps({"stories": [{"id": "STR-008", "status": "pending"}]}))
             self.assertEqual(find_story(stories, "STR-008")["status"], "pending")
+
+    def test_hydrate_notebook_url_from_source(self):
+        with tempfile.TemporaryDirectory() as d:
+            sources = Path(d) / "sources.json"
+            sources.write_text(
+                json.dumps(
+                    {
+                        "sources": [
+                            {
+                                "id": "SRC-003",
+                                "notebook_url": "https://notebook.google.com/notebook/example",
+                            }
+                        ]
+                    }
+                )
+            )
+            story = _hydrate_notebook_source(
+                SimpleNamespace(sources_path=sources), {"id": "STR-008", "source_id": "SRC-003"}
+            )
+            self.assertEqual(story["notebook_url"], "https://notebook.google.com/notebook/example")
 
     def test_state_atomic_save_backup(self):
         with tempfile.TemporaryDirectory() as d:

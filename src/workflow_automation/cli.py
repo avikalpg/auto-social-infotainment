@@ -13,7 +13,7 @@ from .extraction import approve_candidates, extract_candidates
 from .jsonlog import configure
 from .lock import FileLock, LockError
 from .runner import run_stage
-from .state import STAGES, StateStore, StoryState, utcnow
+from .state import StateStore, StoryState, utcnow
 from .tracker import find_source, find_story, select_next_story, story_id
 
 LOG = logging.getLogger("workflow_automation")
@@ -127,14 +127,17 @@ def extract_candidate_pairs(args: argparse.Namespace, cfg: Config) -> int:
 def approve_candidate_pairs(args: argparse.Namespace, cfg: Config) -> int:
     store = StateStore(cfg.state_dir / "sources")
     state_id = f"source--{args.source_id}"
-    raw = store.load(state_id)
-    if not raw:
-        print(json.dumps({"missing": state_id}), file=sys.stderr)
-        return ExitCode.CONFIG
     from .state import SourceState
 
-    source_state = SourceState.from_json(raw.source)
     with FileLock(cfg.lock_path):
+        raw = store.load(state_id)
+        if not raw:
+            print(json.dumps({"missing": state_id}), file=sys.stderr)
+            return ExitCode.CONFIG
+        source_state = SourceState.from_json(raw.source)
+        if source_state.extraction.status == "dry_run":
+            print(json.dumps({"source_id": args.source_id, "approved": False, "reason": "dry-run extraction cannot be approved"}), file=sys.stderr)
+            return ExitCode.CONFIG
         appended = approve_candidates(source_state, cfg.stories_path)
         store.save(StoryState(story_id=state_id, source=source_state.to_json()))
     print(json.dumps({"source_id": args.source_id, "approved": True, "appended": appended}))
@@ -164,7 +167,7 @@ def status(args: argparse.Namespace, cfg: Config) -> int:
 def resume(args: argparse.Namespace, cfg: Config) -> int:
     store = StateStore(cfg.state_dir)
     st = load_or_create(store, cfg, args.story_id)
-    for stage in STAGES:
+    for stage in CMD_STAGE.values():
         if st.stages[stage].status != "done":
             args.command = next(k for k, v in CMD_STAGE.items() if v == stage)
             args.story_id = st.story_id

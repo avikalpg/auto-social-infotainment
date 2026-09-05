@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
 import test from 'node:test';
 
 import {
@@ -82,5 +83,25 @@ test('receipt is atomically written with generation-only queue evidence', async 
     assert.equal(await fs.readdir(path.dirname(req.receipt_path)).then((files) => files.some((file) => file.endsWith('.tmp'))), false);
   } finally {
     await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test('generation worker resolves receipt parents and rejects escaping symlinks', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'notebooklm-generation-'));
+  const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'notebooklm-outside-'));
+  try {
+    await fs.symlink(outside, path.join(root, 'escape'));
+    const requestPath = path.join(root, 'request.json');
+    await fs.writeFile(requestPath, JSON.stringify(request(root, { receipt_path: path.join(root, 'escape', 'receipt.json') })));
+    const result = await new Promise((resolve) => {
+      const child = spawn(process.execPath, [path.resolve('hp-notebooklm-generation-worker.mjs'), requestPath], { stdio: ['ignore', 'pipe', 'pipe'] });
+      let output = ''; child.stderr.on('data', (data) => { output += data; });
+      child.on('close', (code) => resolve({ code, output }));
+    });
+    assert.notEqual(result.code, 0);
+    assert.match(result.output, /resolves outside configured allow_root/);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+    await fs.rm(outside, { recursive: true, force: true });
   }
 });

@@ -48,6 +48,15 @@ export function isWithin(child, root) {
   return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
 }
 
+export async function assertRealContained(destination, allowRoot) {
+  await fs.mkdir(allowRoot, { recursive: true });
+  const realRoot = await fs.realpath(allowRoot);
+  await fs.mkdir(path.dirname(destination), { recursive: true });
+  const realParent = await fs.realpath(path.dirname(destination));
+  if (!isWithin(realParent, realRoot)) throw new Error('receipt_path resolves outside configured allow_root');
+  return path.join(realParent, path.basename(destination));
+}
+
 export function validateNotebookUrl(value) {
   if (typeof value !== 'string' || !value.trim()) {
     throw new Error('notebook_url must be a non-empty NotebookLM URL');
@@ -265,14 +274,7 @@ async function waitForQueuedOrGenerating(page, request) {
     if (state) {
       return { state, confirmation_text: text.slice(0, 1_500) };
     }
-    // Some NotebookLM confirmations do not repeat the supplied title/prompt.
-    // Accept those only after clicking Generate and only if the status wording
-    // itself is visible, never based on a disabled button or elapsed time.
-    const generic = normalizeText(text).match(/\b(queued|queueing|waiting in queue|generating|creating|preparing|in progress)\b/);
-    if (generic) {
-      const stateName = /generating|creating|preparing|in progress/.test(generic[1]) ? 'generating' : 'queued';
-      return { state: stateName, confirmation_text: text.slice(0, 1_500) };
-    }
+    // Never accept unrelated queue text: the confirmation must identify this request.
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   throw new Error('NotebookLM did not visibly confirm queued or generating status');
@@ -298,7 +300,8 @@ async function main() {
   if (!requestFile) throw new Error('usage: hp-notebooklm-generation-worker.mjs REQUEST.json');
 
   const raw = JSON.parse(await fs.readFile(requestFile, 'utf8'));
-  const request = validateRequest(raw);
+  const parsed = validateRequest(raw);
+  const request = { ...parsed, receipt_path: await assertRealContained(parsed.receipt_path, parsed.allow_root) };
   const baseEvidence = {
     request_path: path.resolve(requestFile),
     allow_root: request.allow_root,
@@ -350,7 +353,7 @@ async function main() {
       await writeAtomicJson(request.receipt_path, receipt);
       console.log(JSON.stringify(receipt));
     } finally {
-      await browser.close();
+      await browser.disconnect();
     }
   } catch (error) {
     const receipt = buildReceipt(request, 'error', baseEvidence, error);

@@ -31,12 +31,9 @@ def extract_candidates(source: dict[str, Any], cfg: Config, dry_run: bool = Fals
     state.extraction.attempts += 1
     state.extraction.updated_at = utcnow()
     if dry_run:
-        candidates = [
-            {
-                "main_character": "A generic protagonist",
-                "primary_tension": "A consequential obstacle",
-            }
-        ]
+        # A dry run must not create approvable tracker data.
+        candidates = []
+        state.extraction.status = "dry_run"
     else:
         result = CommandAdapter("source extractor", cfg.extractor_cmd).run(
             ["extract", "--source-id", source_id], False
@@ -45,7 +42,8 @@ def extract_candidates(source: dict[str, Any], cfg: Config, dry_run: bool = Fals
             json.loads(str(result.get("stdout") or "")), source_id
         )
     state.candidate_stories = candidates
-    state.extraction.status = "pending_approval"
+    if not dry_run:
+        state.extraction.status = "pending_approval"
     state.extraction.updated_at = utcnow()
     return state
 

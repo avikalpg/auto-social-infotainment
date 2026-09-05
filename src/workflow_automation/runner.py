@@ -60,6 +60,7 @@ def run_stage(state: StoryState, stage: str, cfg: Config, dry_run: bool = False)
             allow_root=cfg.notebooklm_output_root,
             receipt_path=receipt_path,
             expected_format=src.get("expected_format"),
+            expected_container=src.get("expected_container"),
             expected_duration_seconds=src.get("expected_duration_seconds"),
             cdp_url=cfg.notebooklm_cdp_url,
             ffprobe_bin=cfg.ffprobe_bin,
@@ -91,7 +92,9 @@ def run_stage(state: StoryState, stage: str, cfg: Config, dry_run: bool = False)
             )
             caption = str(src.get("caption") or src.get("caption_markdown") or "").strip()
             if not caption:
-                raise RuntimeError("story source missing caption required for content package assembly")
+                raise RuntimeError(
+                    "story source missing caption required for content package assembly"
+                )
             package_dir = create_content_package(
                 cfg.content_root, state.story_id, final_video, caption, cfg.ffprobe_bin
             )

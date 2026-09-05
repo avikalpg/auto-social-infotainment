@@ -20,6 +20,43 @@ def _is_within(path: Path, root: Path) -> bool:
     return True
 
 
+def _receipt_media_from_probe(media: dict[str, Any], source: Path) -> dict[str, Any]:
+    streams = media["streams"]
+    video = next(stream for stream in streams if stream.get("codec_type") == "video")
+    audio = next((stream for stream in streams if stream.get("codec_type") == "audio"), None)
+    format_data = media["format"]
+    return {
+        "size_bytes": source.stat().st_size,
+        "container": str(format_data.get("format_name") or ""),
+        "duration_seconds": float(format_data.get("duration") or video.get("duration") or 0),
+        "dimensions": {"width": int(video["width"]), "height": int(video["height"])},
+        "codecs": {
+            "video": str(video.get("codec_name") or ""),
+            "audio": str(audio.get("codec_name")) if audio else None,
+        },
+        "sha256": str(media["sha256"]),
+    }
+
+
+def _normalized_container(value: str) -> tuple[str, ...]:
+    return tuple(sorted(part.strip().lower() for part in value.split(",") if part.strip()))
+
+
+def _verify_receipt_metadata(artifact: dict[str, Any], media: dict[str, Any], source: Path) -> None:
+    actual = _receipt_media_from_probe(media, source)
+    for key in ("size_bytes", "dimensions", "codecs", "sha256"):
+        if artifact[key] != actual[key]:
+            raise ValueError(f"notebook artifact receipt {key} does not match ffprobe result")
+    if _normalized_container(str(artifact["container"])) != _normalized_container(
+        actual["container"]
+    ):
+        raise ValueError("notebook artifact receipt container does not match ffprobe result")
+    # ffprobe reports floating-point seconds. Node and Python can serialize equivalent
+    # stream durations with tiny rounding differences, so accept at most 10 ms.
+    if abs(float(artifact["duration_seconds"]) - actual["duration_seconds"]) > 0.01:
+        raise ValueError("notebook artifact receipt duration_seconds does not match ffprobe result")
+
+
 def _atomic_copy(source: Path, destination: Path) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary_name = tempfile.mkstemp(
@@ -64,6 +101,7 @@ def handoff_notebooklm_video(
     if actual_sha != expected_sha:
         raise ValueError("notebook artifact sha256 does not match worker receipt")
     media = ffprobe_validate(source, ffprobe_bin)
+    _verify_receipt_metadata(artifact, media, source)
 
     destination = handoff_root / "notebooklm-original.mp4"
     _atomic_copy(source, destination)

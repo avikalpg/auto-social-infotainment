@@ -120,10 +120,10 @@ class VerticalSliceTests(unittest.TestCase):
             "status": "done",
             "artifact": {
                 "size_bytes": 1234,
-                "container": "mov,mp4",
+                "container": "mov,mp4,m4a,3gp,3g2,mj2",
                 "duration_seconds": 72.0,
                 "dimensions": {"width": 1920, "height": 1080},
-                "codecs": [{"type": "video", "codec": "h264"}],
+                "codecs": {"video": "h264", "audio": None},
                 "sha256": "a" * 64,
             },
             "evidence": {"existing_verified": True},

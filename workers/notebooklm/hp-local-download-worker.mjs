@@ -5,10 +5,12 @@ import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 
 const REQUIRED = ['request_id','story_id','notebook_url','artifact_title','output_path','allow_root'];
-const ALLOWED = new Set(['schema_version',...REQUIRED,'receipt_path','expected_format','expected_duration_seconds','cdp_url','ffprobe_bin','timestamp']);
+const ALLOWED = new Set(['schema_version',...REQUIRED,'receipt_path','expected_format','expected_container','expected_duration_seconds','cdp_url','ffprobe_bin','timestamp']);
 const fail = (message) => { throw new Error(message); };
 const inside = (child, root) => { const rel=path.relative(root, child); return rel === '' || (rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel)); };
 async function safePath(candidate, root, field) {
+ if(typeof candidate!=='string'||!path.isAbsolute(candidate)) fail(`${field} must be an absolute path`);
+ if(typeof root!=='string'||!path.isAbsolute(root)) fail('allow_root must be an absolute path');
  const lexical=path.resolve(candidate); await fs.mkdir(root,{recursive:true}); const realRoot=await fs.realpath(root);
  await fs.mkdir(path.dirname(lexical),{recursive:true}); const realParent=await fs.realpath(path.dirname(lexical));
  if(!inside(realParent,realRoot)) fail(`${field} resolves outside configured allow_root`);
@@ -32,7 +34,12 @@ async function validate(req){
  req.output_path=await safePath(req.output_path,req.allow_root,'output_path');
  req.receipt_path=await safePath(req.receipt_path||path.join(req.allow_root,`${req.request_id}.receipt.json`),req.allow_root,'receipt_path');
 }
-function verifyExpected(a,req){if(req.expected_format&&!a.container.toLowerCase().includes(String(req.expected_format).toLowerCase()))fail(`container ${a.container} does not match expected format ${req.expected_format}`);if(req.expected_duration_seconds!=null&&Math.abs(a.duration_seconds-Number(req.expected_duration_seconds))>2)fail(`duration ${a.duration_seconds} differs from expected ${req.expected_duration_seconds}`);}
+function verifyExpected(a,req){
+ // expected_format names the NotebookLM overview requested upstream (for example, Short).
+ // It is not a file-container assertion. expected_container is the optional media assertion.
+ if(req.expected_container&&!a.container.toLowerCase().split(',').map(x=>x.trim()).includes(String(req.expected_container).toLowerCase())) fail(`container ${a.container} does not include expected container ${req.expected_container}`);
+ if(req.expected_duration_seconds!=null&&Math.abs(a.duration_seconds-Number(req.expected_duration_seconds))>2)fail(`duration ${a.duration_seconds} differs from expected ${req.expected_duration_seconds}`);
+}
 async function main(){
  const requestFile=process.argv[2]; if(!requestFile)fail('usage: hp-local-download-worker.mjs REQUEST.json'); const req=JSON.parse(await fs.readFile(requestFile,'utf8')); await validate(req); const receipt=req.receipt_path;
  try { const a=await probe(req.output_path,req.ffprobe_bin); verifyExpected(a,req); const r={schema_version:1,request_id:req.request_id,story_id:req.story_id,status:'done',output_path:req.output_path,timestamp:new Date().toISOString(),artifact:a,evidence:{idempotent_existing:true,artifact_title:req.artifact_title,local_worker:true}};await atomicJson(receipt,r);console.log(JSON.stringify(r));return; } catch(e) { if(e?.code!=='ENOENT'&&!String(e.message).includes('No such file')) { try{await fs.unlink(req.output_path);}catch{} } }

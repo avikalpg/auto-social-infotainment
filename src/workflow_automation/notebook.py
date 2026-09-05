@@ -20,6 +20,7 @@ def write_download_request(
     allow_root: Path,
     receipt_path: Path | None = None,
     expected_format: str | None = None,
+    expected_container: str | None = None,
     expected_duration_seconds: float | None = None,
     cdp_url: str | None = None,
     ffprobe_bin: str | None = None,
@@ -37,7 +38,10 @@ def write_download_request(
     if receipt_path is not None:
         req["receipt_path"] = str(receipt_path)
     if expected_format:
+        # NotebookLM generation format, such as "Short", not a media container.
         req["expected_format"] = expected_format
+    if expected_container:
+        req["expected_container"] = expected_container
     if expected_duration_seconds is not None:
         req["expected_duration_seconds"] = expected_duration_seconds
     if cdp_url:

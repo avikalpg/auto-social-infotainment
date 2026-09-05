@@ -87,10 +87,10 @@ class ArtifactHandoffTests(unittest.TestCase):
                 "status": "done",
                 "artifact": {
                     "size_bytes": source.stat().st_size,
-                    "container": "mov,mp4",
+                    "container": "mov,mp4,m4a,3gp,3g2,mj2",
                     "duration_seconds": 0.5,
                     "dimensions": {"width": 32, "height": 32},
-                    "codecs": [{"type": "video", "codec": "h264"}],
+                    "codecs": {"video": "h264", "audio": "aac"},
                     "sha256": sha256_file(source),
                 },
                 "evidence": {"visible_download": True},
@@ -112,22 +112,56 @@ class ArtifactHandoffTests(unittest.TestCase):
             outro = root / "branded-outro-silent.mp4"
             final = root / "final.mp4"
             make_silent_outro(outro)
-            result = append_branded_outro_preserve_audio(
-                handed_off, outro, final, FFMPEG, FFPROBE
-            )
+            result = append_branded_outro_preserve_audio(handed_off, outro, final, FFMPEG, FFPROBE)
             self.assertTrue(result["audio"]["matches_original"])
             self.assertEqual(
                 result["audio"]["original_canonical_pcm_sha256"],
                 result["audio"]["final_canonical_pcm_sha256"],
             )
-            self.assertEqual(canonical_pcm_sha256(handed_off, FFMPEG), canonical_pcm_sha256(final, FFMPEG))
+            self.assertEqual(
+                canonical_pcm_sha256(handed_off, FFMPEG), canonical_pcm_sha256(final, FFMPEG)
+            )
             self.assertGreater(
                 float(ffprobe_validate(final, FFPROBE)["format"]["duration"]),
                 float(ffprobe_validate(handed_off, FFPROBE)["format"]["duration"]),
             )
 
-            package = create_content_package(root / "packages", "STR-008", final, "Caption", FFPROBE)
+            package = create_content_package(
+                root / "packages", "STR-008", final, "Caption", FFPROBE
+            )
             self.assertEqual(validate_content_package(package, FFPROBE)["story_id"], "STR-008")
+
+    def test_handoff_rejects_declared_media_metadata_mismatch(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            output_root = root / "worker-output"
+            output_root.mkdir()
+            source = output_root / "video.mp4"
+            make_source_video(source)
+            receipt = {
+                "request_id": "notebooklm-STR-008",
+                "story_id": "STR-008",
+                "status": "done",
+                "artifact": {
+                    "size_bytes": source.stat().st_size + 1,
+                    "container": "mov,mp4,m4a,3gp,3g2,mj2",
+                    "duration_seconds": 0.5,
+                    "dimensions": {"width": 32, "height": 32},
+                    "codecs": {"video": "h264", "audio": "aac"},
+                    "sha256": sha256_file(source),
+                },
+                "evidence": {"visible_download": True},
+                "output_path": str(source),
+            }
+            receipt_path = root / "receipt.json"
+            receipt_path.write_text(json.dumps(receipt))
+            with self.assertRaisesRegex(ValueError, "size_bytes"):
+                handoff_notebooklm_video(
+                    receipt_path,
+                    allowed_output_root=output_root,
+                    handoff_root=root / "handoff",
+                    ffprobe_bin=FFPROBE,
+                )
 
     def test_handoff_rejects_receipt_hash_mismatch(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -142,10 +176,10 @@ class ArtifactHandoffTests(unittest.TestCase):
                 "status": "done",
                 "artifact": {
                     "size_bytes": source.stat().st_size,
-                    "container": "mov,mp4",
+                    "container": "mov,mp4,m4a,3gp,3g2,mj2",
                     "duration_seconds": 0.5,
                     "dimensions": {"width": 32, "height": 32},
-                    "codecs": [{"type": "video", "codec": "h264"}],
+                    "codecs": {"video": "h264", "audio": "aac"},
                     "sha256": "0" * 64,
                 },
                 "evidence": {"visible_download": True},

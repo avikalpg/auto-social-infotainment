@@ -76,6 +76,8 @@ Key commands:
 
 Notebook worker contracts are JSON request/receipt files. Receipts must be `done` and include at least `audio_path` and `transcript_path` artifacts.
 
-Content packages contain `manifest.json`, `caption.md`, `publication-status.json`, and `final-video.mp4`; validation checks required files, JSON shape, non-empty caption, and final video SHA-256.
+Content packages contain `manifest.json`, `caption.md`, `publication-status.json`, and `final-video.mp4`; validation checks required files, JSON shape, non-empty caption, and final video SHA-256. `caption.md` is downstream platform post copy for Instagram, LinkedIn, YouTube, and similar publishers, not burned-in video subtitles.
+
+After Wispr has produced the final script, its integration stores the text in `state.artifacts.wispr_final_script`. `produce-video` then writes a strict caption-generator request and invokes `caption_generator_cmd`. The request contains only that final script plus available `source_title`, `source_url`, `primary_subject`, `main_character`, and `primary_tension` context, then asks the generator to write platform copy to `output_path`. A story must not provide `caption` or `caption_markdown` before video generation.
 
 The ffmpeg outro utility muxes replacement visuals with the original audio stream, extracts pre/post audio as canonical PCM, and fails unless SHA-256 hashes match.

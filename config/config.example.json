@@ -10,6 +10,7 @@
   "branded_outro_path": "/path/to/social-content/outro-v2/output/wrong-by-default-outro-v2-silent.mp4",
   "max_retries": 3,
   "notebooklm_worker_cmd": ["ssh", "browser-worker", "workflow-notebooklm-worker"],
+  "caption_generator_cmd": ["/path/to/downstream-caption-generator"],
   "instagram_cmd": null,
   "x_cmd": null,
   "youtube_cmd": null,

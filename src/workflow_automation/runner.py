@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from .adapters import CommandAdapter
+from .captions import read_generated_caption, write_caption_request
 from .config import Config
 from .handoff import handoff_notebooklm_video
 from .media import append_branded_outro_preserve_audio, verify_audio_hash
@@ -90,11 +91,27 @@ def run_stage(state: StoryState, stage: str, cfg: Config, dry_run: bool = False)
                 cfg.ffmpeg_bin,
                 cfg.ffprobe_bin,
             )
-            caption = str(src.get("caption") or src.get("caption_markdown") or "").strip()
-            if not caption:
+            # The caption is post-production platform copy, never an early story field or
+            # burned-in subtitle. Wispr's final script is intentionally the only narrative
+            # input sent to the caption writer.
+            final_script = str(state.artifacts.get("wispr_final_script") or "").strip()
+            if not final_script:
                 raise RuntimeError(
-                    "story source missing caption required for content package assembly"
+                    "Wispr final script is required after video production before generating platform caption copy"
                 )
+            caption_request_path = handoff_root / "caption.request.json"
+            caption_output_path = handoff_root / "caption.md"
+            write_caption_request(
+                caption_request_path,
+                story_id=state.story_id,
+                final_script=final_script,
+                source=src,
+                output_path=caption_output_path,
+            )
+            caption_result = CommandAdapter(
+                "downstream platform caption generator", cfg.caption_generator_cmd
+            ).run([str(caption_request_path)], dry_run)
+            caption = read_generated_caption(caption_output_path)
             package_dir = create_content_package(
                 cfg.content_root, state.story_id, final_video, caption, cfg.ffprobe_bin
             )
@@ -105,6 +122,11 @@ def run_stage(state: StoryState, stage: str, cfg: Config, dry_run: bool = False)
             result["receipt"] = artifact
             result["handoff"] = handoff
             result["outro"] = outro
+            result["caption"] = {
+                "request_path": str(caption_request_path),
+                "output_path": str(caption_output_path),
+                "generator": caption_result,
+            }
             result["content_package"] = {
                 "path": str(package_dir),
                 "manifest_sha256": manifest["sha256"]["final_video"],

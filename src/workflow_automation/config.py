@@ -21,6 +21,7 @@ class Config:
     ffmpeg_bin: str
     extractor_cmd: tuple[str, ...] | None
     notebooklm_worker_cmd: tuple[str, ...] | None
+    caption_generator_cmd: tuple[str, ...] | None
     instagram_cmd: tuple[str, ...] | None
     x_cmd: tuple[str, ...] | None
     youtube_cmd: tuple[str, ...] | None
@@ -67,6 +68,7 @@ class Config:
             val("ffmpeg_bin", "ffmpeg"),
             cmd("extractor"),
             cmd("notebooklm_worker"),
+            cmd("caption_generator"),
             cmd("instagram"),
             cmd("x"),
             cmd("youtube"),

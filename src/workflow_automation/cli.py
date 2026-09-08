@@ -13,7 +13,7 @@ from .extraction import approve_candidates, extract_candidates
 from .jsonlog import configure
 from .lock import FileLock, LockError
 from .runner import run_stage
-from .state import StateStore, StoryState, utcnow
+from .state import STAGES, StateStore, StoryState, utcnow
 from .tracker import find_source, find_story, select_next_story, story_id
 
 LOG = logging.getLogger("workflow_automation")
@@ -167,8 +167,41 @@ def status(args: argparse.Namespace, cfg: Config) -> int:
 def resume(args: argparse.Namespace, cfg: Config) -> int:
     store = StateStore(cfg.state_dir)
     st = load_or_create(store, cfg, args.story_id)
-    for stage in CMD_STAGE.values():
+    for stage in STAGES:
         if st.stages[stage].status != "done":
+            if stage == "extracted":
+                errors = cfg.validate()
+                if errors:
+                    print(json.dumps({"errors": errors}), file=sys.stderr)
+                    return ExitCode.CONFIG
+                try:
+                    with FileLock(cfg.lock_path):
+                        # Reload while holding the lock so a concurrent command cannot leave the
+                        # canonical first stage pending after resume returns successfully.
+                        st = load_or_create(store, cfg, st.story_id)
+                        run_stage(st, stage, cfg, args.dry_run)
+                        store.save(st)
+                    print(
+                        json.dumps(
+                            {
+                                "story_id": st.story_id,
+                                "stage": stage,
+                                "status": st.stages[stage].status,
+                            }
+                        )
+                    )
+                    return ExitCode.OK
+                except LockError as e:
+                    print(str(e), file=sys.stderr)
+                    return ExitCode.LOCKED
+                except Exception as e:
+                    if "st" in locals():
+                        st.stages[stage].status = "failed"
+                        st.stages[stage].error = str(e)
+                        st.stages[stage].updated_at = utcnow()
+                        store.save(st)
+                    LOG.exception("stage failed", extra={"stage": stage})
+                    return ExitCode.SUBPROCESS
             args.command = next(k for k, v in CMD_STAGE.items() if v == stage)
             args.story_id = st.story_id
             return command_stage(args, cfg)

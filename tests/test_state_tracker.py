@@ -1,10 +1,12 @@
 import json
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
 
-from workflow_automation.cli import _hydrate_notebook_source
+from workflow_automation.cli import _hydrate_notebook_source, resume
 from workflow_automation.media import verify_audio_hash
 from workflow_automation.state import StateStore, StoryState
 from workflow_automation.tracker import find_source, find_story, select_next_story
@@ -75,6 +77,33 @@ class StateTrackerTests(unittest.TestCase):
             got = verify_audio_hash(p, None)
             self.assertTrue(got["matches"])
             self.assertEqual(len(got["sha256"]), 64)
+
+    def test_resume_runs_canonical_extracted_stage_before_claiming_completion(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            store = StateStore(root / "state")
+            state = StoryState("story-001")
+            for stage, record in state.stages.items():
+                if stage != "extracted":
+                    record.status = "done"
+            store.save(state)
+            cfg = SimpleNamespace(
+                state_dir=store.state_dir,
+                lock_path=root / "workflow.lock",
+                max_retries=3,
+                validate=list,
+            )
+            args = SimpleNamespace(story_id="story-001", dry_run=False)
+
+            output = StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(resume(args, cfg), 0)
+
+            result = json.loads(output.getvalue())
+            self.assertEqual(result["stage"], "extracted")
+            self.assertEqual(result["status"], "done")
+            self.assertEqual(store.load("story-001").stages["extracted"].status, "done")
+            self.assertNotEqual(result.get("status"), "complete")
 
 
 if __name__ == "__main__":

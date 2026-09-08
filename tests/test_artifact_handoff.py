@@ -72,8 +72,43 @@ def make_silent_outro(path: Path) -> None:
     )
 
 
+def make_silent_source_video(path: Path) -> None:
+    subprocess.run(
+        [
+            FFMPEG,
+            "-y",
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=red:s=32x32:d=0.5:r=10",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-an",
+            str(path),
+        ],
+        check=True,
+    )
+
+
 @unittest.skipUnless(FFMPEG and FFPROBE, "ffmpeg/ffprobe required for handoff integration test")
 class ArtifactHandoffTests(unittest.TestCase):
+    def test_branded_outro_requires_source_audio_before_ffmpeg(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "silent-source.mp4"
+            outro = root / "branded-outro-silent.mp4"
+            make_silent_source_video(source)
+            make_silent_outro(outro)
+
+            with self.assertRaisesRegex(ValueError, "source video must contain an audio stream"):
+                append_branded_outro_preserve_audio(
+                    source, outro, root / "final.mp4", FFMPEG, FFPROBE
+                )
+
     def test_handoff_outro_audio_integrity_and_package_validation(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

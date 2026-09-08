@@ -164,6 +164,30 @@ class NotebookWorkerContractTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "output_path"):
                 validate_notebook_receipt(receipt)
 
+    def test_python_contract_rejects_prefix_confusion_notebook_urls(self):
+        from workflow_automation.contracts import validate_notebook_request
+
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            request = {
+                "request_id": "r1",
+                "story_id": "s1",
+                "notebook_url": "https://notebook.google.com/notebook/example",
+                "artifact_title": "Short overview",
+                "allow_root": str(root),
+                "output_path": str(root / "out.mp4"),
+            }
+            for malicious_url in (
+                "https://notebook.google.com.evil.example/notebook/example",
+                "https://notebook.google.com@evil.example/notebook/example",
+                "https://notebook.google.com/notebookish/example",
+                "http://notebook.google.com/notebook/example",
+            ):
+                with self.subTest(url=malicious_url):
+                    invalid = dict(request, notebook_url=malicious_url)
+                    with self.assertRaisesRegex(ValueError, "NotebookLM URL"):
+                        validate_notebook_request(invalid)
+
 
 if __name__ == "__main__":
     unittest.main()

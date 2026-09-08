@@ -166,6 +166,8 @@ def append_branded_outro_preserve_audio(
     """
     original_media = ffprobe_validate(original_video, ffprobe_bin)
     outro_media = ffprobe_validate(branded_outro_visual, ffprobe_bin)
+    if not any(stream.get("codec_type") == "audio" for stream in original_media["streams"]):
+        raise ValueError("source video must contain an audio stream to preserve for branded outro")
     if any(stream.get("codec_type") == "audio" for stream in outro_media["streams"]):
         raise ValueError("branded outro must be a silent visual asset")
     original_video_stream = next(

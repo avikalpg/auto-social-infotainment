@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 REQUIRED_CANDIDATE = {"main_character", "primary_tension"}
 
@@ -80,7 +81,13 @@ def validate_notebook_request(data: dict[str, Any]) -> None:
         raise ValueError(
             f"notebook download request has unsupported keys: {', '.join(sorted(extra))}"
         )
-    if not str(data["notebook_url"]).startswith("https://notebook.google.com/"):
+    notebook_url = urlsplit(str(data["notebook_url"]))
+    if (
+        notebook_url.scheme != "https"
+        or notebook_url.hostname != "notebook.google.com"
+        or not notebook_url.path.startswith("/notebook/")
+        or notebook_url.path == "/notebook/"
+    ):
         raise ValueError("notebook_url must be a NotebookLM URL")
     allow_root = Path(str(data["allow_root"]))
     if not allow_root.is_absolute():

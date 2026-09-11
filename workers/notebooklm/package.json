@@ -1,0 +1,9 @@
+{
+  "name": "notebooklm-hp-local-worker",
+  "private": true,
+  "type": "module",
+  "dependencies": { "playwright-core": "^1.55.0" },
+  "scripts": {
+    "check": "node --check hp-local-download-worker.mjs && node --check hp-notebooklm-generation-worker.mjs && node --test hp-notebooklm-generation-worker.test.mjs"
+  }
+}

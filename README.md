@@ -16,6 +16,25 @@ Production-grade Python 3.11+ foundation for the social-content workflow.
 
 NotebookLM rule: production video generation must run through an HP-local Playwright worker. Azure-side code must never download NotebookLM assets. When replacing outros, preserve the source audio byte-for-byte and verify hashes.
 
+### HP NotebookLM generation worker
+
+`workers/notebooklm/hp-notebooklm-generation-worker.mjs` is generation-only and is separate from the download worker. It connects to the authenticated HP Chrome CDP endpoint, reuses or navigates to the supplied notebook, configures a **Short** Video Overview with the supplied `focus_prompt`, and writes an atomic receipt only after NotebookLM visibly reports the request as queued or generating. It does not wait for completion or download anything.
+
+Its request is strict JSON: `request_id`, `story_id`, `notebook_url` (an `https://notebook.google.com/notebook/...` URL), `artifact_title`, `focus_prompt`, absolute `allow_root`, and an absolute `receipt_path` contained by `allow_root`; optional keys are `schema_version: 1`, `cdp_url`, and `timestamp`. The receipt has `status: "queued"` (or `"error"`), fixed `video_format: "Short"`, and evidence including `already_queued`, the visible generation state, and `download_attempted: false`.
+
+```bash
+node workers/notebooklm/hp-notebooklm-generation-worker.mjs request.json
+```
+
+### Source-level NotebookLM lifecycle
+
+- Use one NotebookLM notebook per source, not one notebook per story.
+- Create and index the notebook as soon as a source is selected.
+- After the source's candidate stories are verified and approved, queue one independently prompted Short Video Overview for every approved story in that same notebook.
+- Confirm each generation has actually entered the queue before starting the next one; NotebookLM may not accept concurrent starts reliably.
+- Keep story-level request/receipt tracking (`STR-*`), artifact titles, factual review, downloads, outro replacement, packaging, and publication independent.
+- Create a separate notebook only when a story requires a materially different or expanded source set.
+
 ## Commands
 
 ```bash
@@ -57,6 +76,8 @@ Key commands:
 
 Notebook worker contracts are JSON request/receipt files. Receipts must be `done` and include at least `audio_path` and `transcript_path` artifacts.
 
-Content packages contain `manifest.json`, `caption.md`, `publication-status.json`, and `final-video.mp4`; validation checks required files, JSON shape, non-empty caption, and final video SHA-256.
+Content packages contain `manifest.json`, `caption.md`, `publication-status.json`, and `final-video.mp4`; validation checks required files, JSON shape, non-empty caption, and final video SHA-256. `caption.md` is downstream platform post copy for Instagram, LinkedIn, YouTube, and similar publishers, not burned-in video subtitles.
+
+After Wispr has produced the final script, its integration stores the text in `state.artifacts.wispr_final_script`. `produce-video` then writes a strict caption-generator request and invokes `caption_generator_cmd`. The request contains only that final script plus available `source_title`, `source_url`, `primary_subject`, `main_character`, and `primary_tension` context, then asks the generator to write platform copy to `output_path`. A story must not provide `caption` or `caption_markdown` before video generation.
 
 The ffmpeg outro utility muxes replacement visuals with the original audio stream, extracts pre/post audio as canonical PCM, and fails unless SHA-256 hashes match.

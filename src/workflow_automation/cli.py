@@ -41,13 +41,18 @@ def load_or_create(store: StateStore, cfg: Config, sid: str | None) -> StoryStat
     if sid:
         state = store.load(sid)
         if state:
+            state.source = _hydrate_notebook_source(cfg, state.source)
             return state
         return StoryState(
             story_id=sid, source=_hydrate_notebook_source(cfg, find_story(cfg.stories_path, sid))
         )
     story = _hydrate_notebook_source(cfg, select_next_story(cfg.stories_path, cfg.state_dir))
     sid = story_id(story)
-    return store.load(sid) or StoryState(story_id=sid, source=story)
+    state = store.load(sid)
+    if state:
+        state.source = _hydrate_notebook_source(cfg, state.source)
+        return state
+    return StoryState(story_id=sid, source=story)
 
 
 def command_stage(args: argparse.Namespace, cfg: Config) -> int:
@@ -59,31 +64,34 @@ def command_stage(args: argparse.Namespace, cfg: Config) -> int:
     stage = CMD_STAGE[args.command]
     try:
         with FileLock(cfg.lock_path):
-            state = load_or_create(store, cfg, args.story_id)
-            run_stage(state, stage, cfg, args.dry_run)
-            store.save(state)
-            print(
-                json.dumps(
-                    {
-                        "story_id": state.story_id,
-                        "stage": stage,
-                        "status": state.stages[stage].status,
-                    }
+            try:
+                state = load_or_create(store, cfg, args.story_id)
+                run_stage(state, stage, cfg, args.dry_run)
+                store.save(state)
+                print(
+                    json.dumps(
+                        {
+                            "story_id": state.story_id,
+                            "stage": stage,
+                            "status": state.stages[stage].status,
+                        }
+                    )
                 )
-            )
-            return ExitCode.OK
+                return ExitCode.OK
+            except Exception as e:
+                if "state" in locals():
+                    state.stages[stage].status = "failed"
+                    state.stages[stage].error = str(e)
+                    state.stages[stage].updated_at = utcnow()
+                    store.save(state)
+                raise
     except LockError as e:
         print(str(e), file=sys.stderr)
         return ExitCode.LOCKED
     except AdapterNotConfigured as e:
         print(str(e), file=sys.stderr)
         return ExitCode.ADAPTER_NOT_CONFIGURED
-    except Exception as e:
-        if "state" in locals():
-            state.stages[stage].status = "failed"
-            state.stages[stage].error = str(e)
-            state.stages[stage].updated_at = utcnow()
-            store.save(state)
+    except Exception:
         LOG.exception("stage failed", extra={"stage": stage})
         return ExitCode.SUBPROCESS
 
@@ -97,29 +105,32 @@ def extract_candidate_pairs(args: argparse.Namespace, cfg: Config) -> int:
     state_id = f"source--{args.source_id}"
     try:
         with FileLock(cfg.lock_path):
-            source = find_source(cfg.sources_path, args.source_id)
-            state = extract_candidates(source, cfg, args.dry_run)
-            store.save(StoryState(story_id=state_id, source=state.to_json()))
-            print(
-                json.dumps(
-                    {
-                        "source_id": args.source_id,
-                        "stage": "candidate_pairs_extracted",
-                        "status": state.extraction.status,
-                        "candidates": len(state.candidate_stories),
-                    }
+            try:
+                source = find_source(cfg.sources_path, args.source_id)
+                state = extract_candidates(source, cfg, args.dry_run)
+                store.save(StoryState(story_id=state_id, source=state.to_json()))
+                print(
+                    json.dumps(
+                        {
+                            "source_id": args.source_id,
+                            "stage": "candidate_pairs_extracted",
+                            "status": state.extraction.status,
+                            "candidates": len(state.candidate_stories),
+                        }
+                    )
                 )
-            )
-            return ExitCode.OK
+                return ExitCode.OK
+            except Exception as e:
+                if "state" in locals():
+                    state.extraction.status = "failed"
+                    state.extraction.error = str(e)
+                    state.extraction.updated_at = utcnow()
+                    store.save(StoryState(story_id=state_id, source=state.to_json()))
+                raise
     except LockError as e:
         print(str(e), file=sys.stderr)
         return ExitCode.LOCKED
-    except Exception as e:
-        if "state" in locals():
-            state.extraction.status = "failed"
-            state.extraction.error = str(e)
-            state.extraction.updated_at = utcnow()
-            store.save(StoryState(story_id=state_id, source=state.to_json()))
+    except Exception:
         LOG.exception("story extraction failed", extra={"source_id": args.source_id})
         return ExitCode.SUBPROCESS
 

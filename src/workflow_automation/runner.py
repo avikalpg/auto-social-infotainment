@@ -135,7 +135,7 @@ def run_stage(state: StoryState, stage: str, cfg: Config, dry_run: bool = False)
             result["audio_hash"] = verify_audio_hash(
                 Path(state.artifacts["audio_path"]), state.source.get("expected_audio_sha256")
             )
-            if not result["audio_hash"].get("matches_expected", True):
+            if not result["audio_hash"].get("matches", True):
                 raise RuntimeError("audio integrity verification failed")
         mark_done(state, stage, result)
         return

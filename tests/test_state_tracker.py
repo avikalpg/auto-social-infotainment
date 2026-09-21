@@ -105,6 +105,59 @@ class StateTrackerTests(unittest.TestCase):
             self.assertEqual(store.load("story-001").stages["extracted"].status, "done")
             self.assertNotEqual(result.get("status"), "complete")
 
+    def test_load_or_create_hydrates_existing_state(self):
+        from workflow_automation.cli import load_or_create
+
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            store = StateStore(root / "state")
+            sources_path = root / "sources.json"
+            sources_path.write_text(
+                json.dumps(
+                    {
+                        "sources": [
+                            {
+                                "id": "SRC-001",
+                                "notebook_url": "https://notebook.google.com/notebook/test-1",
+                            }
+                        ]
+                    }
+                )
+            )
+            stories_path = root / "stories.json"
+            stories_path.write_text(json.dumps({"stories": []}))
+            cfg = SimpleNamespace(
+                state_dir=store.state_dir,
+                sources_path=sources_path,
+                stories_path=stories_path,
+            )
+            state = StoryState("STR-001", source={"source_id": "SRC-001"})
+            store.save(state)
+
+            loaded = load_or_create(store, cfg, "STR-001")
+            self.assertEqual(
+                loaded.source.get("notebook_url"),
+                "https://notebook.google.com/notebook/test-1",
+            )
+
+    def test_config_null_json_values_use_default_or_none(self):
+        from workflow_automation.config import Config
+
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            cfg_file = root / "config.json"
+            cfg_file.write_text(
+                json.dumps(
+                    {
+                        "notebooklm_cdp_url": None,
+                        "branded_outro_path": None,
+                    }
+                )
+            )
+            cfg = Config.load(cfg_file)
+            self.assertIsNone(cfg.notebooklm_cdp_url)
+            self.assertIsNone(cfg.branded_outro_path)
+
 
 if __name__ == "__main__":
     unittest.main()

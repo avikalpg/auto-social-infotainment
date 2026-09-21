@@ -37,7 +37,8 @@ class Config:
         data: dict[str, object] = json.loads(config_path.read_text()) if config_path else {}
 
         def val(name: str, default: str) -> str:
-            return str(os.getenv(f"WA_{name.upper()}", data.get(name, default)))
+            raw_val = os.getenv(f"WA_{name.upper()}", data.get(name, default))
+            return default if raw_val is None else str(raw_val)
 
         def cmd(name: str) -> tuple[str, ...] | None:
             raw = os.getenv(f"WA_{name.upper()}_CMD") or data.get(f"{name}_cmd")

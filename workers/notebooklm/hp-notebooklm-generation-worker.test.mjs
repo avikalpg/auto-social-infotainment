@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
 import {
@@ -94,7 +95,8 @@ test('generation worker resolves receipt parents and rejects escaping symlinks',
     const requestPath = path.join(root, 'request.json');
     await fs.writeFile(requestPath, JSON.stringify(request(root, { receipt_path: path.join(root, 'escape', 'receipt.json') })));
     const result = await new Promise((resolve) => {
-      const child = spawn(process.execPath, [path.resolve('hp-notebooklm-generation-worker.mjs'), requestPath], { stdio: ['ignore', 'pipe', 'pipe'] });
+      const scriptPath = fileURLToPath(new URL('./hp-notebooklm-generation-worker.mjs', import.meta.url));
+      const child = spawn(process.execPath, [scriptPath, requestPath], { stdio: ['ignore', 'pipe', 'pipe'] });
       let output = ''; child.stderr.on('data', (data) => { output += data; });
       child.on('close', (code) => resolve({ code, output }));
     });

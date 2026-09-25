@@ -1,17 +1,23 @@
-from pathlib import Path
 import json
 import shutil
 import subprocess
 import tempfile
 import unittest
+from pathlib import Path
 
 from workflow_automation.contracts import validate_candidate_output, validate_publication_receipt
 from workflow_automation.extraction import approve_candidates
+from workflow_automation.media import (
+    replace_outro_visuals_preserve_audio,
+    verify_canonical_pcm_equal,
+)
+from workflow_automation.notebook import ingest_download_receipt, write_download_request
+from workflow_automation.packages import (
+    apply_publication_receipt,
+    create_content_package,
+    validate_content_package,
+)
 from workflow_automation.state import SourceState
-from workflow_automation.notebook import write_worker_request, ingest_worker_receipt
-from workflow_automation.packages import create_content_package, validate_content_package, apply_publication_receipt
-from workflow_automation.media import replace_outro_visuals_preserve_audio, verify_canonical_pcm_equal
-
 
 FFMPEG = shutil.which("ffmpeg")
 FFPROBE = shutil.which("ffprobe")
@@ -55,7 +61,14 @@ class VerticalSliceTests(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         stories_path = Path(tmp.name) / "stories.json"
         stories_path.write_text(json.dumps({"stories": []}))
-        data = {"candidate_stories": [{"main_character": "A field engineer", "primary_tension": "A safety mechanism conflicts with delivery pressure"}]}
+        data = {
+            "candidate_stories": [
+                {
+                    "main_character": "A field engineer",
+                    "primary_tension": "A safety mechanism conflicts with delivery pressure",
+                }
+            ]
+        }
         candidates = validate_candidate_output(data, "source-001")
         ss = SourceState("source-001", candidate_stories=candidates)
         self.assertEqual(approve_candidates(ss, stories_path), 1)
@@ -67,20 +80,57 @@ class VerticalSliceTests(unittest.TestCase):
         self.assertEqual(set(candidates[0]), {"main_character", "primary_tension"})
         self.assertEqual(ss.extraction.status, "approved")
         with self.assertRaises(ValueError):
-            validate_candidate_output({"candidate_stories": [{"main_character": "A", "primary_tension": "B", "resolution": "C"}]}, "source-001")
+            validate_candidate_output(
+                {
+                    "candidate_stories": [
+                        {"main_character": "A", "primary_tension": "B", "resolution": "C"}
+                    ]
+                },
+                "source-001",
+            )
 
-    def test_notebook_contracts_use_approved_story_fields_not_source_url(self):
+    def test_notebook_download_contracts_are_strict_and_private(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         root = Path(tmp.name)
-        story = {"id": "story-001", "source_id": "source-001", "status": "pending", "main_character": "A", "primary_tension": "B"}
-        req = write_worker_request(root / "request.json", story, root / "out")
+        req = write_download_request(
+            root / "request.json",
+            request_id="notebook-story-001",
+            story_id="story-001",
+            notebook_url="https://notebook.google.com/notebook/example",
+            artifact_title="Approved public title",
+            output_path=root / "out" / "story-001.mp4",
+            allow_root=root / "out",
+            receipt_path=root / "out" / "receipt.json",
+            expected_format="Short",
+            expected_duration_seconds=72,
+        )
         self.assertEqual(req["story_id"], "story-001")
         self.assertNotIn("source_url", req)
-        self.assertEqual(set(req["story"]), {"main_character", "primary_tension"})
-        receipt = {"request_id": req["request_id"], "story_id": "story-001", "status": "done", "timestamp": "2026-01-01T00:00:00Z", "artifacts": {"audio_path": "audio.wav", "transcript_path": "transcript.md"}}
+        self.assertNotIn("story", req)
+        with self.assertRaises(ValueError):
+            bad = dict(req)
+            bad["secret"] = "nope"
+            from workflow_automation.contracts import validate_notebook_request
+
+            validate_notebook_request(bad)
+        receipt = {
+            "request_id": req["request_id"],
+            "story_id": "story-001",
+            "status": "done",
+            "artifact": {
+                "size_bytes": 1234,
+                "container": "mov,mp4,m4a,3gp,3g2,mj2",
+                "duration_seconds": 72.0,
+                "dimensions": {"width": 1920, "height": 1080},
+                "codecs": {"video": "h264", "audio": None},
+                "sha256": "a" * 64,
+            },
+            "evidence": {"existing_verified": True},
+            "output_path": str(root / "out" / "story-001.mp4"),
+        }
         (root / "receipt.json").write_text(json.dumps(receipt))
-        self.assertEqual(ingest_worker_receipt(root / "receipt.json")["audio_path"], "audio.wav")
+        self.assertEqual(ingest_download_receipt(root / "receipt.json")["sha256"], "a" * 64)
 
     @unittest.skipUnless(FFMPEG and FFPROBE, "ffmpeg/ffprobe required for media integration test")
     def test_outro_replacement_preserves_canonical_pcm_and_package_ffprobes(self):
@@ -96,10 +146,18 @@ class VerticalSliceTests(unittest.TestCase):
         self.assertTrue(result["audio"]["matches_original"])
         self.assertTrue(final.exists())
         self.assertTrue(verify_canonical_pcm_equal(original, final, FFMPEG)["matches_original"])
-        pkg = create_content_package(root / "packages", "story-001", final, "Generic caption", FFPROBE)
+        pkg = create_content_package(
+            root / "packages", "story-001", final, "Generic caption", FFPROBE
+        )
         manifest = validate_content_package(pkg, FFPROBE)
         self.assertIn("media", manifest)
-        receipt = {"platform": "generic-platform", "status": "published", "public_url": "https://example.invalid/post", "timestamp": "2026-01-01T00:00:00Z", "verification_evidence": {"checked": True}}
+        receipt = {
+            "platform": "generic-platform",
+            "status": "published",
+            "public_url": "https://example.invalid/post",
+            "timestamp": "2026-01-01T00:00:00Z",
+            "verification_evidence": {"checked": True},
+        }
         validate_publication_receipt(receipt)
         apply_publication_receipt(pkg, receipt)
         status = json.loads((pkg / "publication-status.json").read_text())
@@ -113,8 +171,10 @@ class VerticalSliceTests(unittest.TestCase):
         root = Path(tmp.name)
         video = root / "input.mp4"
         video.write_bytes(b"generic-video")
-        with self.assertRaises(Exception):
-            create_content_package(root / "packages", "story-001", video, "Generic caption", FFPROBE)
+        with self.assertRaises(RuntimeError):
+            create_content_package(
+                root / "packages", "story-001", video, "Generic caption", FFPROBE
+            )
 
 
 if __name__ == "__main__":

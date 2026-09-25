@@ -8,3 +8,5 @@ state/*.json
 !state/.gitkeep
 downloads/
 artifacts/
+runs/
+node_modules/

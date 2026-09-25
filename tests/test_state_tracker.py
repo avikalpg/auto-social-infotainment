@@ -1,12 +1,44 @@
-from pathlib import Path
 import json
 import tempfile
 import unittest
-from workflow_automation.state import StateStore, StoryState
-from workflow_automation.tracker import find_source, select_next_story
+from contextlib import redirect_stdout
+from io import StringIO
+from pathlib import Path
+from types import SimpleNamespace
+
+from workflow_automation.cli import _hydrate_notebook_source, resume
 from workflow_automation.media import verify_audio_hash
+from workflow_automation.state import StateStore, StoryState
+from workflow_automation.tracker import find_source, find_story, select_next_story
+
 
 class StateTrackerTests(unittest.TestCase):
+    def test_find_story_by_explicit_id(self):
+        with tempfile.TemporaryDirectory() as d:
+            stories = Path(d) / "stories.json"
+            stories.write_text(json.dumps({"stories": [{"id": "STR-008", "status": "pending"}]}))
+            self.assertEqual(find_story(stories, "STR-008")["status"], "pending")
+
+    def test_hydrate_notebook_url_from_source(self):
+        with tempfile.TemporaryDirectory() as d:
+            sources = Path(d) / "sources.json"
+            sources.write_text(
+                json.dumps(
+                    {
+                        "sources": [
+                            {
+                                "id": "SRC-003",
+                                "notebook_url": "https://notebook.google.com/notebook/example",
+                            }
+                        ]
+                    }
+                )
+            )
+            story = _hydrate_notebook_source(
+                SimpleNamespace(sources_path=sources), {"id": "STR-008", "source_id": "SRC-003"}
+            )
+            self.assertEqual(story["notebook_url"], "https://notebook.google.com/notebook/example")
+
     def test_state_atomic_save_backup(self):
         with tempfile.TemporaryDirectory() as d:
             tmp_path = Path(d)
@@ -45,6 +77,87 @@ class StateTrackerTests(unittest.TestCase):
             got = verify_audio_hash(p, None)
             self.assertTrue(got["matches"])
             self.assertEqual(len(got["sha256"]), 64)
+
+    def test_resume_runs_canonical_extracted_stage_before_claiming_completion(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            store = StateStore(root / "state")
+            state = StoryState("story-001")
+            for stage, record in state.stages.items():
+                if stage != "extracted":
+                    record.status = "done"
+            store.save(state)
+            cfg = SimpleNamespace(
+                state_dir=store.state_dir,
+                lock_path=root / "workflow.lock",
+                max_retries=3,
+                validate=list,
+            )
+            args = SimpleNamespace(story_id="story-001", dry_run=False)
+
+            output = StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(resume(args, cfg), 0)
+
+            result = json.loads(output.getvalue())
+            self.assertEqual(result["stage"], "extracted")
+            self.assertEqual(result["status"], "done")
+            self.assertEqual(store.load("story-001").stages["extracted"].status, "done")
+            self.assertNotEqual(result.get("status"), "complete")
+
+    def test_load_or_create_hydrates_existing_state(self):
+        from workflow_automation.cli import load_or_create
+
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            store = StateStore(root / "state")
+            sources_path = root / "sources.json"
+            sources_path.write_text(
+                json.dumps(
+                    {
+                        "sources": [
+                            {
+                                "id": "SRC-001",
+                                "notebook_url": "https://notebook.google.com/notebook/test-1",
+                            }
+                        ]
+                    }
+                )
+            )
+            stories_path = root / "stories.json"
+            stories_path.write_text(json.dumps({"stories": []}))
+            cfg = SimpleNamespace(
+                state_dir=store.state_dir,
+                sources_path=sources_path,
+                stories_path=stories_path,
+            )
+            state = StoryState("STR-001", source={"source_id": "SRC-001"})
+            store.save(state)
+
+            loaded = load_or_create(store, cfg, "STR-001")
+            self.assertEqual(
+                loaded.source.get("notebook_url"),
+                "https://notebook.google.com/notebook/test-1",
+            )
+
+    def test_config_null_json_values_use_default_or_none(self):
+        from workflow_automation.config import Config
+
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            cfg_file = root / "config.json"
+            cfg_file.write_text(
+                json.dumps(
+                    {
+                        "notebooklm_cdp_url": None,
+                        "branded_outro_path": None,
+                    }
+                )
+            )
+            cfg = Config.load(cfg_file)
+            self.assertIsNone(cfg.notebooklm_cdp_url)
+            self.assertIsNone(cfg.branded_outro_path)
+
 
 if __name__ == "__main__":
     unittest.main()

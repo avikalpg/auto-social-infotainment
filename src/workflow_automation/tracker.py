@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
-import json
 
 
 def _read_json(path: Path) -> Any:
@@ -45,10 +45,19 @@ def find_source(path: Path, source_id: str) -> dict[str, Any]:
     raise LookupError(f"source not found: {source_id}")
 
 
+def find_story(path: Path, requested_story_id: str) -> dict[str, Any]:
+    for story in load_stories(path):
+        if story_id(story) == requested_story_id:
+            return story
+    raise LookupError(f"story not found: {requested_story_id}")
+
+
 def select_next_story(stories_path: Path, state_dir: Path) -> dict[str, Any]:
     for story in load_stories(stories_path):
         sid = story_id(story)
-        state_path = state_dir / f"{''.join(c if c.isalnum() or c in '._-' else '_' for c in sid)}.json"
+        state_path = (
+            state_dir / f"{''.join(c if c.isalnum() or c in '._-' else '_' for c in sid)}.json"
+        )
         if not state_path.exists():
             return story
         state = json.loads(state_path.read_text())

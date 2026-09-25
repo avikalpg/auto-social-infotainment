@@ -1,16 +1,16 @@
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any
 import json
 import os
 import tempfile
+from pathlib import Path
+from typing import Any
 
 from .adapters import CommandAdapter
 from .config import Config
 from .contracts import validate_candidate_output
 from .state import SourceState, utcnow
-from .tracker import load_stories, story_id
+from .tracker import load_stories
 
 
 def atomic_write_json(path: Path, data: Any) -> None:
@@ -31,12 +31,19 @@ def extract_candidates(source: dict[str, Any], cfg: Config, dry_run: bool = Fals
     state.extraction.attempts += 1
     state.extraction.updated_at = utcnow()
     if dry_run:
-        candidates = [{"main_character": "A generic protagonist", "primary_tension": "A consequential obstacle"}]
+        # A dry run must not create approvable tracker data.
+        candidates = []
+        state.extraction.status = "dry_run"
     else:
-        result = CommandAdapter("source extractor", cfg.extractor_cmd).run(["extract", "--source-id", source_id], False)
-        candidates = validate_candidate_output(json.loads(str(result.get("stdout") or "")), source_id)
+        result = CommandAdapter("source extractor", cfg.extractor_cmd).run(
+            ["extract", "--source-id", source_id], False
+        )
+        candidates = validate_candidate_output(
+            json.loads(str(result.get("stdout") or "")), source_id
+        )
     state.candidate_stories = candidates
-    state.extraction.status = "pending_approval"
+    if not dry_run:
+        state.extraction.status = "pending_approval"
     state.extraction.updated_at = utcnow()
     return state
 
@@ -53,7 +60,11 @@ def _next_story_id(existing: list[dict[str, Any]]) -> str:
 def approve_candidates(source_state: SourceState, stories_path: Path) -> int:
     existing = load_stories(stories_path) if stories_path.exists() else []
     existing_pairs = {
-        (str(s.get("source_id", "")), str(s.get("main_character", "")), str(s.get("primary_tension", "")))
+        (
+            str(s.get("source_id", "")),
+            str(s.get("main_character", "")),
+            str(s.get("primary_tension", "")),
+        )
         for s in existing
     }
     appended = 0

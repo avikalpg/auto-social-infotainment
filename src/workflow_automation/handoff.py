@@ -86,7 +86,7 @@ def handoff_notebooklm_video(
     The handoff deliberately copies rather than moves the HP-produced artifact, so a failed
     downstream outro/package operation cannot destroy the worker's independently verified output.
     """
-    artifact = ingest_download_receipt(receipt_path)
+    artifact = ingest_download_receipt(receipt_path, allow_root=allowed_output_root)
     raw_path = artifact.get("output_path")
     if not raw_path:
         raise ValueError("notebook download receipt missing output_path")

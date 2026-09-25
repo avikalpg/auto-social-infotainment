@@ -109,7 +109,17 @@ def validate_notebook_request(data: dict[str, Any]) -> None:
         raise ValueError("expected_duration_seconds must be numeric")
 
 
-def validate_notebook_receipt(data: dict[str, Any]) -> None:
+def validate_notebook_receipt(
+    data: dict[str, Any], *, allow_root: Path | str | None = None
+) -> None:
+    """Validate a notebook download receipt contract.
+
+    Checks required keys, status, artifact metadata, and evidence shape.
+    If `allow_root` is provided, or if the receipt includes `allow_root`,
+    validates that `output_path` is contained within the allow root.
+    Use `validate_notebook_receipt_containment(data, allow_root)` for strict,
+    mandatory containment validation.
+    """
     require_keys(
         data,
         {"request_id", "story_id", "status", "output_path", "artifact", "evidence"},
@@ -117,8 +127,15 @@ def validate_notebook_receipt(data: dict[str, Any]) -> None:
     )
     if data["status"] != "done":
         raise ValueError("notebook download receipt status must be done")
-    if not Path(str(data["output_path"])).is_absolute():
+    output_path = Path(str(data["output_path"]))
+    if not output_path.is_absolute():
         raise ValueError("notebook download receipt output_path must be an absolute path")
+    effective_allow_root = allow_root if allow_root is not None else data.get("allow_root")
+    if effective_allow_root is not None:
+        root_path = Path(str(effective_allow_root))
+        if not root_path.is_absolute():
+            raise ValueError("allow_root must be an absolute path")
+        _absolute_contained_path(output_path, root_path, "output_path")
     artifact = data["artifact"]
     if not isinstance(artifact, dict):
         raise TypeError("notebook download receipt artifact must be object")
@@ -159,6 +176,14 @@ def validate_notebook_receipt(data: dict[str, Any]) -> None:
         raise ValueError("notebook artifact sha256 must be a SHA-256 hex digest")
     if not isinstance(data["evidence"], dict):
         raise TypeError("notebook download receipt evidence must be object")
+
+
+def validate_notebook_receipt_containment(
+    data: dict[str, Any], allow_root: Path | str
+) -> Path:
+    """Dedicated validator strictly enforcing receipt output_path containment within allow_root."""
+    validate_notebook_receipt(data, allow_root=allow_root)
+    return _absolute_contained_path(data["output_path"], Path(str(allow_root)), "output_path")
 
 
 def validate_publication_receipt(data: dict[str, Any]) -> None:

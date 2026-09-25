@@ -4,7 +4,11 @@ import json
 from pathlib import Path
 from typing import Any
 
-from .contracts import validate_notebook_receipt, validate_notebook_request
+from .contracts import (
+    validate_notebook_receipt,
+    validate_notebook_receipt_containment,
+    validate_notebook_request,
+)
 from .packages import atomic_json
 from .state import utcnow
 
@@ -53,11 +57,18 @@ def write_download_request(
     return req
 
 
-def ingest_download_receipt(path: Path) -> dict[str, Any]:
+def ingest_download_receipt(
+    path: Path, *, allow_root: Path | None = None
+) -> dict[str, Any]:
     data = json.loads(path.read_text())
-    validate_notebook_receipt(data)
+    if allow_root is not None:
+        validate_notebook_receipt_containment(data, allow_root)
+    else:
+        validate_notebook_receipt(data)
     artifact = dict(data["artifact"])
     artifact["output_path"] = data.get("output_path")
+    if "allow_root" in data:
+        artifact["allow_root"] = data["allow_root"]
     artifact["request_id"] = data["request_id"]
     artifact["story_id"] = data["story_id"]
     return artifact

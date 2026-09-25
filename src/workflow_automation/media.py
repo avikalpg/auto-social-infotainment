@@ -182,6 +182,26 @@ def append_branded_outro_preserve_audio(
     ):
         raise ValueError("branded outro dimensions must match the source video")
 
+    # Normalize frame rate, pixel format, SAR, and time base across inputs before concatenation
+    # to avoid ffmpeg concat filter failures or stream property mismatches.
+    source_fps = str(
+        original_video_stream.get("r_frame_rate")
+        or original_video_stream.get("avg_frame_rate")
+        or "30/1"
+    )
+    if not source_fps or source_fps == "0/0":
+        source_fps = "30/1"
+    pix_fmt = str(original_video_stream.get("pix_fmt") or "yuv420p")
+    sar = str(original_video_stream.get("sample_aspect_ratio") or "1/1")
+    if not sar or sar == "0/1":
+        sar = "1/1"
+
+    filter_complex = (
+        f"[0:v:0]fps=fps={source_fps}:round=near,format=pix_fmts={pix_fmt},setsar=sar={sar},settb=AVTB[v0];"
+        f"[1:v:0]fps=fps={source_fps}:round=near,format=pix_fmts={pix_fmt},setsar=sar={sar},settb=AVTB[v1];"
+        "[v0][v1]concat=n=2:v=1:a=0[v]"
+    )
+
     output_video.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(
         dir=output_video.parent, suffix=output_video.suffix or ".mp4", delete=False
@@ -199,7 +219,7 @@ def append_branded_outro_preserve_audio(
                 "-i",
                 str(branded_outro_visual),
                 "-filter_complex",
-                "[0:v:0][1:v:0]concat=n=2:v=1:a=0[v]",
+                filter_complex,
                 "-map",
                 "[v]",
                 "-map",

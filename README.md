@@ -74,7 +74,26 @@ Key commands:
 - `workflow-automation approve-candidate-pairs --source-id <id>`: explicit human approval gate. Atomically appends new approved `main_character` + `primary_tension` pairs to the configured stories tracker and is idempotent by source/pair.
 - Publisher completion requires a receipt containing `platform`, `status: published`, `public_url`, `timestamp`, and `verification_evidence` before a package status can mark that platform published.
 
-Notebook worker contracts are JSON request/receipt files. Receipts must be `done` and include at least `audio_path` and `transcript_path` artifacts.
+Notebook worker contracts are JSON request/receipt files. Download receipts must be `done` and include `output_path`, verified `artifact` media metadata (`size_bytes`, `container`, `duration_seconds`, `dimensions`, `codecs`, `sha256`), and execution `evidence`:
+
+```json
+{
+  "request_id": "...",
+  "story_id": "...",
+  "status": "done",
+  "output_path": "/path/to/downloads/notebooklm/artifact.mp4",
+  "timestamp": "2026-09-25T00:00:00.000Z",
+  "artifact": {
+    "size_bytes": 1048576,
+    "container": "mov,mp4,m4a,3gp,3g2,mj2",
+    "duration_seconds": 45.2,
+    "dimensions": { "width": 1080, "height": 1920 },
+    "codecs": { "video": "h264", "audio": "aac" },
+    "sha256": "..."
+  },
+  "evidence": {}
+}
+```
 
 Content packages contain `manifest.json`, `caption.md`, `publication-status.json`, and `final-video.mp4`; validation checks required files, JSON shape, non-empty caption, and final video SHA-256. `caption.md` is downstream platform post copy for Instagram, LinkedIn, YouTube, and similar publishers, not burned-in video subtitles.
 

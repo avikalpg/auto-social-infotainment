@@ -229,3 +229,84 @@ class ArtifactHandoffTests(unittest.TestCase):
                     handoff_root=root / "handoff",
                     ffprobe_bin=FFPROBE,
                 )
+
+    def test_branded_outro_normalizes_differing_fps_pix_fmt_sar_and_timebase(self):
+        """Verify robust concat compatibility when outro differs in FPS, pixel format, and SAR."""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source-24fps.mp4"
+            outro = root / "outro-30fps-yuv444p-sar.mp4"
+            final = root / "final-normalized.mp4"
+
+            # Source: 24 fps, yuv420p, SAR 1:1, with audio
+            subprocess.run(
+                [
+                    FFMPEG,
+                    "-y",
+                    "-v",
+                    "error",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "color=c=red:s=32x32:d=0.5:r=24",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "sine=frequency=440:duration=0.5:sample_rate=48000",
+                    "-map",
+                    "0:v:0",
+                    "-map",
+                    "1:a:0",
+                    "-c:v",
+                    "libx264",
+                    "-pix_fmt",
+                    "yuv420p",
+                    "-c:a",
+                    "aac",
+                    "-shortest",
+                    str(source),
+                ],
+                check=True,
+            )
+
+            # Outro: 30 fps, yuv444p, SAR 4:3, silent
+            subprocess.run(
+                [
+                    FFMPEG,
+                    "-y",
+                    "-v",
+                    "error",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "color=c=blue:s=32x32:d=0.3:r=30",
+                    "-vf",
+                    "setsar=4/3",
+                    "-pix_fmt",
+                    "yuv444p",
+                    "-c:v",
+                    "libx264",
+                    "-an",
+                    str(outro),
+                ],
+                check=True,
+            )
+
+            result = append_branded_outro_preserve_audio(source, outro, final, FFMPEG, FFPROBE)
+            self.assertTrue(result["audio"]["matches_original"])
+            self.assertEqual(
+                result["audio"]["original_canonical_pcm_sha256"],
+                result["audio"]["final_canonical_pcm_sha256"],
+            )
+
+            final_media = ffprobe_validate(final, FFPROBE)
+            final_v = next(s for s in final_media["streams"] if s.get("codec_type") == "video")
+            # Resulting video stream has matching dimensions, yuv420p format, SAR 1:1, and extended duration
+            self.assertEqual(final_v["width"], 32)
+            self.assertEqual(final_v["height"], 32)
+            self.assertEqual(final_v["pix_fmt"], "yuv420p")
+            self.assertEqual(final_v.get("sample_aspect_ratio"), "1:1")
+            self.assertGreater(
+                float(final_media["format"]["duration"]),
+                float(ffprobe_validate(source, FFPROBE)["format"]["duration"]),
+            )

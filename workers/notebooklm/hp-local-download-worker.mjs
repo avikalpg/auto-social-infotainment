@@ -4,6 +4,8 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 
+import { fileURLToPath } from 'node:url';
+
 const REQUIRED = ['request_id','story_id','notebook_url','artifact_title','output_path','allow_root'];
 const ALLOWED = new Set(['schema_version',...REQUIRED,'receipt_path','expected_format','expected_container','expected_duration_seconds','cdp_url','ffprobe_bin','timestamp']);
 const fail = (message) => { throw new Error(message); };
@@ -29,8 +31,18 @@ async function probe(file,bin='ffprobe'){
  if(!video) fail('downloaded artifact has no video stream'); const stat=await fs.stat(file); if(stat.size<1024) fail('downloaded artifact is unexpectedly small');
  return {size_bytes:stat.size,container:String(d.format?.format_name||''),duration_seconds:Number(d.format?.duration||video.duration||0),dimensions:{width:Number(video.width),height:Number(video.height)},codecs:{video:String(video.codec_name||''),audio:audio?String(audio.codec_name||''):null},sha256:await sha256(file)};
 }
-async function validate(req){
- for(const k of REQUIRED)if(!req[k])fail(`missing required request key: ${k}`);const extra=Object.keys(req).filter(k=>!ALLOWED.has(k));if(extra.length)fail(`unsupported request keys: ${extra.sort().join(', ')}`);if(!String(req.notebook_url).startsWith('https://notebook.google.com/'))fail('notebook_url must be a NotebookLM URL');
+export function validateNotebookUrl(value) {
+ if(typeof value!=='string'||!value.trim()) fail('notebook_url must be a NotebookLM URL');
+ let url;
+ try { url = new URL(value); } catch { fail('notebook_url must be a NotebookLM URL'); }
+ if(url.protocol!=='https:'||url.hostname!=='notebook.google.com') fail('notebook_url must be a NotebookLM URL');
+ if(!/^\/notebook\/[^/]+\/?$/.test(url.pathname)) fail('notebook_url must be a NotebookLM URL');
+ if(url.username||url.password||url.hash) fail('notebook_url must be a NotebookLM URL');
+ return url.toString();
+}
+export async function validate(req){
+ for(const k of REQUIRED)if(!req[k])fail(`missing required request key: ${k}`);const extra=Object.keys(req).filter(k=>!ALLOWED.has(k));if(extra.length)fail(`unsupported request keys: ${extra.sort().join(', ')}`);
+ validateNotebookUrl(req.notebook_url);
  req.output_path=await safePath(req.output_path,req.allow_root,'output_path');
  req.receipt_path=await safePath(req.receipt_path||path.join(req.allow_root,`${req.request_id}.receipt.json`),req.allow_root,'receipt_path');
 }
@@ -42,11 +54,14 @@ function verifyExpected(a,req){
 }
 async function main(){
  const requestFile=process.argv[2]; if(!requestFile)fail('usage: hp-local-download-worker.mjs REQUEST.json'); const req=JSON.parse(await fs.readFile(requestFile,'utf8')); await validate(req); const receipt=req.receipt_path;
- try { const a=await probe(req.output_path,req.ffprobe_bin); verifyExpected(a,req); const r={schema_version:1,request_id:req.request_id,story_id:req.story_id,status:'done',output_path:req.output_path,timestamp:new Date().toISOString(),artifact:a,evidence:{idempotent_existing:true,artifact_title:req.artifact_title,local_worker:true}};await atomicJson(receipt,r);console.log(JSON.stringify(r));return; } catch(e) { if(e?.code!=='ENOENT'&&!String(e.message).includes('No such file')) { try{await fs.unlink(req.output_path);}catch{} } }
+ try { const a=await probe(req.output_path,req.ffprobe_bin); verifyExpected(a,req); const r={schema_version:1,request_id:req.request_id,story_id:req.story_id,status:'done',output_path:req.output_path,allow_root:req.allow_root,timestamp:new Date().toISOString(),artifact:a,evidence:{idempotent_existing:true,artifact_title:req.artifact_title,local_worker:true}};await atomicJson(receipt,r);console.log(JSON.stringify(r));return; } catch(e) { if(e?.code!=='ENOENT'&&!String(e.message).includes('No such file')) { try{await fs.unlink(req.output_path);}catch{} } }
  const { chromium }=await import('playwright-core'); const browser=await chromium.connectOverCDP(req.cdp_url||'http://127.0.0.1:9222');
  let lastError; try { const context=browser.contexts()[0]; if(!context)fail('authenticated Chrome context not found'); let page=context.pages().find(p=>p.url()===req.notebook_url||p.url().includes(new URL(req.notebook_url).pathname)); if(!page)page=await context.newPage();
-  for(let attempt=1;attempt<=2;attempt++){try{await page.goto(req.notebook_url,{waitUntil:'domcontentloaded',timeout:60000});const artifact=page.getByRole('button',{name:req.artifact_title,exact:false}).first();await artifact.waitFor({state:'visible',timeout:60000});await artifact.click();const dl=page.getByRole('button',{name:/^Download$/i}).first();await dl.waitFor({state:'visible',timeout:30000});const [download]=await Promise.all([page.waitForEvent('download',{timeout:120000}),dl.click()]);await download.saveAs(req.output_path);const failure=await download.failure();if(failure)fail(`download failed: ${failure}`);const a=await probe(req.output_path,req.ffprobe_bin);verifyExpected(a,req);const r={schema_version:1,request_id:req.request_id,story_id:req.story_id,status:'done',output_path:req.output_path,timestamp:new Date().toISOString(),artifact:a,evidence:{idempotent_existing:false,artifact_title:req.artifact_title,suggested_filename:download.suggestedFilename(),selector_attempts:attempt,download_failure:null,local_worker:true}};await atomicJson(receipt,r);console.log(JSON.stringify(r));return;}catch(e){lastError=e;if(attempt===1)await page.reload({waitUntil:'domcontentloaded',timeout:60000}).catch(()=>{});}}
+  for(let attempt=1;attempt<=2;attempt++){try{await page.goto(req.notebook_url,{waitUntil:'domcontentloaded',timeout:60000});const artifact=page.getByRole('button',{name:req.artifact_title,exact:false}).first();await artifact.waitFor({state:'visible',timeout:60000});await artifact.click();const dl=page.getByRole('button',{name:/^Download$/i}).first();await dl.waitFor({state:'visible',timeout:30000});const [download]=await Promise.all([page.waitForEvent('download',{timeout:120000}),dl.click()]);await download.saveAs(req.output_path);const failure=await download.failure();if(failure)fail(`download failed: ${failure}`);const a=await probe(req.output_path,req.ffprobe_bin);verifyExpected(a,req);const r={schema_version:1,request_id:req.request_id,story_id:req.story_id,status:'done',output_path:req.output_path,allow_root:req.allow_root,timestamp:new Date().toISOString(),artifact:a,evidence:{idempotent_existing:false,artifact_title:req.artifact_title,suggested_filename:download.suggestedFilename(),selector_attempts:attempt,download_failure:null,local_worker:true}};await atomicJson(receipt,r);console.log(JSON.stringify(r));return;}catch(e){lastError=e;if(attempt===1)await page.reload({waitUntil:'domcontentloaded',timeout:60000}).catch(()=>{});}}
   throw lastError;
  } finally { await browser.disconnect(); }
 }
-main().catch(async e=>{console.error(e.message||String(e));process.exitCode=1;});
+const invokedAsScript = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (invokedAsScript) {
+  main().catch(async e=>{console.error(e.message||String(e));process.exitCode=1;});
+}

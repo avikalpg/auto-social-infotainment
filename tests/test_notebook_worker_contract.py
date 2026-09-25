@@ -164,6 +164,55 @@ class NotebookWorkerContractTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "output_path"):
                 validate_notebook_receipt(receipt)
 
+    def test_receipt_containment_validation(self):
+        from workflow_automation.contracts import (
+            validate_notebook_receipt,
+            validate_notebook_receipt_containment,
+        )
+
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            allowed = root / "allowed"
+            allowed.mkdir()
+            outside = root / "outside"
+            outside.mkdir()
+
+            receipt = {
+                "request_id": "r1",
+                "story_id": "s1",
+                "status": "done",
+                "output_path": str(outside / "out.mp4"),
+                "artifact": {
+                    "size_bytes": 1,
+                    "container": "mp4",
+                    "duration_seconds": 1,
+                    "dimensions": {"width": 1, "height": 1},
+                    "codecs": {"video": "h264", "audio": None},
+                    "sha256": "a" * 64,
+                },
+                "evidence": {"checked": True},
+            }
+            # Without allow_root specified, basic validation passes for absolute paths
+            validate_notebook_receipt(receipt)
+
+            # When allow_root is explicitly passed, receipt fails if output_path is outside
+            with self.assertRaisesRegex(ValueError, "within allow_root"):
+                validate_notebook_receipt(receipt, allow_root=allowed)
+
+            with self.assertRaisesRegex(ValueError, "within allow_root"):
+                validate_notebook_receipt_containment(receipt, allow_root=allowed)
+
+            # If receipt itself carries allow_root, validate_notebook_receipt enforces it
+            receipt_with_root = dict(receipt, allow_root=str(allowed))
+            with self.assertRaisesRegex(ValueError, "within allow_root"):
+                validate_notebook_receipt(receipt_with_root)
+
+            # Valid contained path passes
+            contained_receipt = dict(receipt, output_path=str(allowed / "out.mp4"), allow_root=str(allowed))
+            validate_notebook_receipt(contained_receipt)
+            resolved = validate_notebook_receipt_containment(contained_receipt, allowed)
+            self.assertEqual(resolved, (allowed / "out.mp4").resolve())
+
     def test_python_contract_rejects_prefix_confusion_notebook_urls(self):
         from workflow_automation.contracts import validate_notebook_request
 

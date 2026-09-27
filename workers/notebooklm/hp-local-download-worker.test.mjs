@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
 
-import { validate, validateNotebookUrl } from './hp-local-download-worker.mjs';
+import { publishVerifiedDownload, validate, validateNotebookUrl } from './hp-local-download-worker.mjs';
 
 test('download worker validateNotebookUrl accepts valid NotebookLM URLs', () => {
   assert.equal(
@@ -88,5 +91,27 @@ test('download worker validate rejects missing or non-string or whitespace-only 
       new RegExp(`${key} must be a non-empty string`),
       `Expected rejection for ${key} = ${JSON.stringify(val)}`
     );
+  }
+});
+
+test('verified downloads publish atomically without replacing an existing artifact', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'notebooklm-download-'));
+  try {
+    const temporary = path.join(root, '.video.part');
+    const destination = path.join(root, 'video.mp4');
+    await fs.writeFile(temporary, 'verified');
+    await publishVerifiedDownload(temporary, destination);
+    assert.equal(await fs.readFile(destination, 'utf8'), 'verified');
+    await assert.rejects(() => fs.stat(temporary), { code: 'ENOENT' });
+
+    const retryTemporary = path.join(root, '.retry.part');
+    await fs.writeFile(retryTemporary, 'partial retry');
+    await assert.rejects(
+      () => publishVerifiedDownload(retryTemporary, destination),
+      { code: 'EEXIST' },
+    );
+    assert.equal(await fs.readFile(destination, 'utf8'), 'verified');
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
   }
 });

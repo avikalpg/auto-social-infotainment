@@ -118,6 +118,7 @@ class VerticalSliceTests(unittest.TestCase):
             "request_id": req["request_id"],
             "story_id": "story-001",
             "status": "done",
+            "timestamp": "2026-09-27T00:00:00Z",
             "artifact": {
                 "size_bytes": 1234,
                 "container": "mov,mp4,m4a,3gp,3g2,mj2",

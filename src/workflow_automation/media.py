@@ -4,7 +4,9 @@ import hashlib
 import json
 import subprocess
 import tempfile
+from fractions import Fraction
 from pathlib import Path
+from typing import Any
 
 
 def sha256_file(path: Path) -> str:
@@ -152,6 +154,26 @@ def replace_outro_visuals_preserve_audio(
         raise
 
 
+def _stream_duration(media: dict[str, Any], codec_type: str) -> float:
+    stream = next(item for item in media["streams"] if item.get("codec_type") == codec_type)
+    value = stream.get("duration")
+    if value in (None, "N/A"):
+        value = media["format"].get("duration")
+    duration = float(value or 0)
+    if duration <= 0:
+        raise ValueError(f"{codec_type} stream duration must be positive")
+    return duration
+
+
+def _frame_duration(stream: dict[str, object]) -> float:
+    raw = str(stream.get("avg_frame_rate") or stream.get("r_frame_rate") or "0/1")
+    try:
+        rate = float(Fraction(raw))
+    except (ValueError, ZeroDivisionError):
+        rate = 0
+    return 1 / rate if rate > 0 else 1 / 30
+
+
 def append_branded_outro_preserve_audio(
     original_video: Path,
     branded_outro_visual: Path,
@@ -240,11 +262,33 @@ def append_branded_outro_preserve_audio(
             raise RuntimeError(f"ffmpeg branded outro append failed: {proc.stderr.strip()}")
         verification = verify_canonical_pcm_equal(original_video, tmp, ffmpeg_bin)
         media = ffprobe_validate(tmp, ffprobe_bin)
+        source_video_duration = _stream_duration(original_media, "video")
+        source_audio_duration = _stream_duration(original_media, "audio")
+        outro_video_duration = _stream_duration(outro_media, "video")
+        final_video_duration = _stream_duration(media, "video")
+        final_audio_duration = _stream_duration(media, "audio")
+        video_tolerance = max(0.1, 2 * _frame_duration(original_video_stream))
+        expected_video_duration = source_video_duration + outro_video_duration
+        if abs(final_video_duration - expected_video_duration) > video_tolerance:
+            raise ValueError("final video duration does not include the complete branded outro")
+        if abs(final_audio_duration - source_audio_duration) > 0.05:
+            raise ValueError("final audio duration changed while appending the branded outro")
+        if final_video_duration <= final_audio_duration:
+            raise ValueError("branded outro must extend video beyond the preserved audio stream")
+        timeline = {
+            "source_video_seconds": source_video_duration,
+            "source_audio_seconds": source_audio_duration,
+            "outro_video_seconds": outro_video_duration,
+            "final_video_seconds": final_video_duration,
+            "final_audio_seconds": final_audio_duration,
+            "silent_outro_verified": True,
+        }
         tmp.replace(output_video)
         return {
             "output": str(output_video),
             "audio": verification,
             "media": media,
+            "timeline": timeline,
             "branded_outro": str(branded_outro_visual),
         }
     except Exception:

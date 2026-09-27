@@ -150,6 +150,7 @@ class NotebookWorkerContractTests(unittest.TestCase):
                 "request_id": "r1",
                 "story_id": "s1",
                 "status": "done",
+                "timestamp": "2026-09-27T00:00:00Z",
                 "output_path": "relative.mp4",
                 "artifact": {
                     "size_bytes": 1,
@@ -163,6 +164,47 @@ class NotebookWorkerContractTests(unittest.TestCase):
             }
             with self.assertRaisesRegex(ValueError, "output_path"):
                 validate_notebook_receipt(receipt)
+
+    def test_receipt_contract_validates_identity_timestamp_and_notebook_url(self):
+        from workflow_automation.contracts import validate_notebook_receipt
+
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            receipt = {
+                "request_id": "r1",
+                "story_id": "s1",
+                "status": "done",
+                "timestamp": "2026-09-27T00:00:00Z",
+                "notebook_url": "https://notebook.google.com/notebook/example",
+                "output_path": str(root / "video.mp4"),
+                "artifact": {
+                    "size_bytes": 1,
+                    "container": "mp4",
+                    "duration_seconds": 1,
+                    "dimensions": {"width": 1, "height": 1},
+                    "codecs": {"video": "h264", "audio": None},
+                    "sha256": "a" * 64,
+                },
+                "evidence": {"local_worker": True},
+            }
+            validate_notebook_receipt(receipt)
+            for key, value in (
+                ("request_id", 1),
+                ("story_id", " "),
+                ("timestamp", {}),
+                ("output_path", []),
+            ):
+                with self.subTest(key=key), self.assertRaisesRegex(ValueError, key):
+                    validate_notebook_receipt(dict(receipt, **{key: value}))
+            with self.assertRaisesRegex(ValueError, "NotebookLM URL"):
+                validate_notebook_receipt(
+                    dict(receipt, notebook_url="https://notebook.google.com.evil/notebook/example")
+                )
+            for key, value in (("size_bytes", True), ("duration_seconds", False)):
+                with self.subTest(key=key):
+                    artifact = dict(receipt["artifact"], **{key: value})
+                    with self.assertRaisesRegex(ValueError, key):
+                        validate_notebook_receipt(dict(receipt, artifact=artifact))
 
     def test_python_contract_requires_non_empty_string_types(self):
         from workflow_automation.contracts import validate_notebook_request
@@ -221,6 +263,7 @@ class NotebookWorkerContractTests(unittest.TestCase):
                 "request_id": "r1",
                 "story_id": "s1",
                 "status": "done",
+                "timestamp": "2026-09-27T00:00:00Z",
                 "output_path": str(outside / "out.mp4"),
                 "artifact": {
                     "size_bytes": 1,
@@ -316,6 +359,7 @@ class NotebookWorkerContractTests(unittest.TestCase):
                 "request_id": "r1",
                 "story_id": "s1",
                 "status": "done",
+                "timestamp": "2026-09-27T00:00:00Z",
                 "output_path": str(outside / "out.mp4"),
                 "artifact": {
                     "size_bytes": 100,
@@ -423,6 +467,7 @@ class NotebookWorkerContractTests(unittest.TestCase):
                 "request_id": "r1",
                 "story_id": "s1",
                 "status": "done",
+                "timestamp": "2026-09-27T00:00:00Z",
                 "output_path": str(root / "out.mp4"),
                 "artifact": {
                     "size_bytes": 1,
@@ -512,6 +557,7 @@ class NotebookWorkerContractTests(unittest.TestCase):
                 "request_id": "req-1",
                 "story_id": "story-1",
                 "status": "done",
+                "timestamp": "2026-09-27T00:00:00Z",
                 "notebook_url": "https://notebook.google.com/notebook/example",
                 "output_path": str(source),
                 "allow_root": str(allowed),

@@ -24,6 +24,15 @@ async function atomicJson(file, value) {
  try { handle=await fs.open(tmp,'wx',0o600); await handle.writeFile(JSON.stringify(value,null,2)+'\n'); await handle.sync(); await handle.close(); handle=undefined; await fs.rename(tmp,file); const dirHandle=await fs.open(dir,'r'); try { await dirHandle.sync(); } finally { await dirHandle.close(); } }
  finally { await handle?.close().catch(()=>{}); await fs.unlink(tmp).catch(()=>{}); }
 }
+export async function publishVerifiedDownload(temporary, destination) {
+ const handle=await fs.open(temporary,'r');
+ try { await handle.sync(); } finally { await handle.close(); }
+ // link() publishes without replacing a destination created by a concurrent worker.
+ await fs.link(temporary,destination);
+ await fs.unlink(temporary);
+ const dirHandle=await fs.open(path.dirname(destination),'r');
+ try { await dirHandle.sync(); } finally { await dirHandle.close(); }
+}
 function run(bin,args){return new Promise((resolve,reject)=>{const p=spawn(bin,args);let out='',err='';p.stdout.on('data',d=>out+=d);p.stderr.on('data',d=>err+=d);p.on('error',reject);p.on('close',c=>c===0?resolve(out):reject(new Error(`${bin} failed rc=${c}: ${err.trim()}`)));});}
 async function sha256(file){const b=await fs.readFile(file);return crypto.createHash('sha256').update(b).digest('hex');}
 async function probe(file,bin='ffprobe'){
@@ -74,6 +83,7 @@ async function main(){
      request_id: req.request_id,
      story_id: req.story_id,
      status: 'done',
+     notebook_url: req.notebook_url,
      output_path: req.output_path,
      allow_root: req.allow_root,
      timestamp: new Date().toISOString(),
@@ -86,7 +96,32 @@ async function main(){
  }
  const { chromium }=await import('playwright-core'); const browser=await chromium.connectOverCDP(req.cdp_url||'http://127.0.0.1:9222');
  let lastError; try { const context=browser.contexts()[0]; if(!context)fail('authenticated Chrome context not found'); let page=context.pages().find(p=>p.url()===req.notebook_url||p.url().includes(new URL(req.notebook_url).pathname)); if(!page)page=await context.newPage();
-  for(let attempt=1;attempt<=2;attempt++){try{await page.goto(req.notebook_url,{waitUntil:'domcontentloaded',timeout:60000});const artifact=page.getByRole('button',{name:req.artifact_title,exact:false}).first();await artifact.waitFor({state:'visible',timeout:60000});await artifact.click();const dl=page.getByRole('button',{name:/^Download$/i}).first();await dl.waitFor({state:'visible',timeout:30000});const [download]=await Promise.all([page.waitForEvent('download',{timeout:120000}),dl.click()]);await download.saveAs(req.output_path);const failure=await download.failure();if(failure)fail(`download failed: ${failure}`);const a=await probe(req.output_path,req.ffprobe_bin);verifyExpected(a,req);const r={schema_version:1,request_id:req.request_id,story_id:req.story_id,status:'done',output_path:req.output_path,allow_root:req.allow_root,timestamp:new Date().toISOString(),artifact:a,evidence:{idempotent_existing:false,artifact_title:req.artifact_title,suggested_filename:download.suggestedFilename(),selector_attempts:attempt,download_failure:null,local_worker:true}};await atomicJson(receipt,r);console.log(JSON.stringify(r));return;}catch(e){lastError=e;if(attempt===1)await page.reload({waitUntil:'domcontentloaded',timeout:60000}).catch(()=>{});}}
+  for(let attempt=1;attempt<=2;attempt++){
+   const temporary=path.join(path.dirname(req.output_path),`.${path.basename(req.output_path)}.${process.pid}.${crypto.randomUUID()}.part`);
+   try {
+    await page.goto(req.notebook_url,{waitUntil:'domcontentloaded',timeout:60000});
+    const artifact=page.getByRole('button',{name:req.artifact_title,exact:false}).first();
+    await artifact.waitFor({state:'visible',timeout:60000});
+    await artifact.click();
+    const dl=page.getByRole('button',{name:/^Download$/i}).first();
+    await dl.waitFor({state:'visible',timeout:30000});
+    const [download]=await Promise.all([page.waitForEvent('download',{timeout:120000}),dl.click()]);
+    await download.saveAs(temporary);
+    const failure=await download.failure();
+    if(failure)fail(`download failed: ${failure}`);
+    const a=await probe(temporary,req.ffprobe_bin);
+    verifyExpected(a,req);
+    await publishVerifiedDownload(temporary,req.output_path);
+    const r={schema_version:1,request_id:req.request_id,story_id:req.story_id,status:'done',notebook_url:req.notebook_url,output_path:req.output_path,allow_root:req.allow_root,timestamp:new Date().toISOString(),artifact:a,evidence:{idempotent_existing:false,artifact_title:req.artifact_title,suggested_filename:download.suggestedFilename(),selector_attempts:attempt,download_failure:null,local_worker:true}};
+    await atomicJson(receipt,r);
+    console.log(JSON.stringify(r));
+    return;
+   }catch(e){
+    lastError=e;
+    await fs.unlink(temporary).catch(()=>{});
+    if(attempt===1)await page.reload({waitUntil:'domcontentloaded',timeout:60000}).catch(()=>{});
+   }
+  }
   throw lastError;
  } finally { await browser.disconnect(); }
 }

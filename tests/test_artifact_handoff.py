@@ -120,6 +120,7 @@ class ArtifactHandoffTests(unittest.TestCase):
                 "request_id": "notebooklm-STR-008",
                 "story_id": "STR-008",
                 "status": "done",
+                "timestamp": "2026-09-27T00:00:00Z",
                 "artifact": {
                     "size_bytes": source.stat().st_size,
                     "container": "mov,mp4,m4a,3gp,3g2,mj2",
@@ -155,6 +156,16 @@ class ArtifactHandoffTests(unittest.TestCase):
             )
             self.assertEqual(
                 canonical_pcm_sha256(handed_off, FFMPEG), canonical_pcm_sha256(final, FFMPEG)
+            )
+            self.assertTrue(result["timeline"]["silent_outro_verified"])
+            self.assertGreater(
+                result["timeline"]["final_video_seconds"],
+                result["timeline"]["final_audio_seconds"],
+            )
+            self.assertAlmostEqual(
+                result["timeline"]["source_audio_seconds"],
+                result["timeline"]["final_audio_seconds"],
+                delta=0.05,
             )
             self.assertGreater(
                 float(ffprobe_validate(final, FFPROBE)["format"]["duration"]),
@@ -263,6 +274,7 @@ class ArtifactHandoffTests(unittest.TestCase):
                 "request_id": "notebooklm-STR-008",
                 "story_id": "STR-008",
                 "status": "done",
+                "timestamp": "2026-09-27T00:00:00Z",
                 "artifact": {
                     "size_bytes": source.stat().st_size + 1,
                     "container": "mov,mp4,m4a,3gp,3g2,mj2",
@@ -295,6 +307,7 @@ class ArtifactHandoffTests(unittest.TestCase):
                 "request_id": "notebooklm-STR-008",
                 "story_id": "STR-008",
                 "status": "done",
+                "timestamp": "2026-09-27T00:00:00Z",
                 "artifact": {
                     "size_bytes": source.stat().st_size,
                     "container": "mov,mp4,m4a,3gp,3g2,mj2",

@@ -3,7 +3,10 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import stat
 import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +22,31 @@ def _is_within(path: Path, root: Path) -> bool:
     except ValueError:
         return False
     return True
+
+
+@contextmanager
+def _open_contained_source(source: Path, root: Path) -> Iterator[Path]:
+    """Pin a regular source file descriptor and verify its opened target is under root."""
+    root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    source_fd: int | None = None
+    try:
+        source_fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW)
+        opened_root = Path(f"/proc/self/fd/{root_fd}").resolve()
+        opened_source = Path(f"/proc/self/fd/{source_fd}").resolve()
+        try:
+            opened_source.relative_to(opened_root)
+        except ValueError as error:
+            raise ValueError(
+                f"notebook artifact path escapes allowed output root: {opened_source}"
+            ) from error
+        if not stat.S_ISREG(os.fstat(source_fd).st_mode):
+            raise ValueError(f"notebook artifact is not a regular file: {source}")
+        # Child ffprobe processes can open this descriptor through the parent process's procfs.
+        yield Path(f"/proc/{os.getpid()}/fd/{source_fd}")
+    finally:
+        if source_fd is not None:
+            os.close(source_fd)
+        os.close(root_fd)
 
 
 def _receipt_media_from_probe(
@@ -62,10 +90,12 @@ def _verify_receipt_metadata(
         raise ValueError("notebook artifact receipt duration_seconds does not match ffprobe result")
 
 
-def _atomic_copy(source: Path, destination: Path) -> None:
+def _atomic_copy(source: Path, destination: Path) -> Path:
     destination.parent.mkdir(parents=True, exist_ok=True)
+    parent = destination.parent.resolve()
+    directory_fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     fd, temporary_name = tempfile.mkstemp(
-        dir=str(destination.parent), prefix=f".{destination.name}.", suffix=".tmp"
+        dir=str(parent), prefix=f".{destination.name}.", suffix=".tmp"
     )
     temporary = Path(temporary_name)
     try:
@@ -73,10 +103,14 @@ def _atomic_copy(source: Path, destination: Path) -> None:
             shutil.copyfileobj(reader, writer, length=1024 * 1024)
             writer.flush()
             os.fsync(writer.fileno())
-        os.replace(temporary, destination)
+        os.replace(temporary, destination.name, dst_dir_fd=directory_fd)
+        os.fsync(directory_fd)
+        return parent / destination.name
     except Exception:
         temporary.unlink(missing_ok=True)
         raise
+    finally:
+        os.close(directory_fd)
 
 
 def handoff_notebooklm_video(
@@ -129,15 +163,16 @@ def handoff_notebooklm_video(
         raise ValueError(f"notebook artifact does not exist: {source}")
 
     expected_sha = str(artifact["sha256"])
-    actual_sha = sha256_file(source)
-    if actual_sha != expected_sha:
-        raise ValueError("notebook artifact sha256 does not match worker receipt")
-    media = ffprobe_validate(source, ffprobe_bin)
-    _verify_receipt_metadata(artifact, media, source, actual_sha)
-
     destination = handoff_root / "notebooklm-original.mp4"
-    _atomic_copy(source, destination)
-    copied_sha = sha256_file(destination)
+    with _open_contained_source(source, allowed_output_root) as pinned_source:
+        actual_sha = sha256_file(pinned_source)
+        if actual_sha != expected_sha:
+            raise ValueError("notebook artifact sha256 does not match worker receipt")
+        media = ffprobe_validate(pinned_source, ffprobe_bin)
+        _verify_receipt_metadata(artifact, media, pinned_source, actual_sha)
+        destination = _atomic_copy(pinned_source, destination)
+    with _open_contained_source(destination, destination.parent) as pinned_destination:
+        copied_sha = sha256_file(pinned_destination)
     if copied_sha != actual_sha:
         destination.unlink(missing_ok=True)
         raise RuntimeError("artifact handoff copy sha256 mismatch")

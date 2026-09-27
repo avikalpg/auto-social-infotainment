@@ -246,14 +246,31 @@ def validate_notebook_receipt(
         raise ValueError("notebook download receipt schema_version must be 1")
     require_keys(
         data,
-        {"request_id", "story_id", "status", "output_path", "artifact", "evidence"},
+        {
+            "request_id",
+            "story_id",
+            "status",
+            "output_path",
+            "timestamp",
+            "artifact",
+            "evidence",
+        },
         "notebook download receipt",
     )
+    for key in ("request_id", "story_id", "output_path", "timestamp"):
+        if not isinstance(data[key], str) or not data[key].strip():
+            raise ValueError(f"notebook download receipt {key} must be a non-empty string")
     if data["status"] != "done":
         raise ValueError("notebook download receipt status must be done")
-    output_path = Path(str(data["output_path"]))
+    if "notebook_url" in data:
+        _validate_notebook_url(data["notebook_url"])
+    output_path = Path(data["output_path"])
     if not output_path.is_absolute():
         raise ValueError("notebook download receipt output_path must be an absolute path")
+    if "allow_root" in data and (
+        not isinstance(data["allow_root"], str) or not data["allow_root"].strip()
+    ):
+        raise ValueError("notebook download receipt allow_root must be a non-empty string")
     effective_allow_root = allow_root if allow_root is not None else data.get("allow_root")
     if effective_allow_root is not None:
         root_path = Path(str(effective_allow_root))
@@ -268,10 +285,15 @@ def validate_notebook_receipt(
         {"size_bytes", "container", "duration_seconds", "dimensions", "codecs", "sha256"},
         "notebook artifact",
     )
-    if not isinstance(artifact["size_bytes"], int) or artifact["size_bytes"] < 1:
+    if (
+        isinstance(artifact["size_bytes"], bool)
+        or not isinstance(artifact["size_bytes"], int)
+        or artifact["size_bytes"] < 1
+    ):
         raise ValueError("notebook artifact size_bytes must be a positive integer")
     if (
-        not isinstance(artifact["duration_seconds"], (int, float))
+        isinstance(artifact["duration_seconds"], bool)
+        or not isinstance(artifact["duration_seconds"], (int, float))
         or artifact["duration_seconds"] <= 0
     ):
         raise ValueError("notebook artifact duration_seconds must be positive")

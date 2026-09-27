@@ -74,6 +74,13 @@ test('download worker validate rejects missing or non-string or whitespace-only 
     );
   }
 
+  for (const schema of [2, 0, '1', false]) {
+    await assert.rejects(
+      () => validate({ ...baseReq, schema_version: schema }),
+      /schema_version must be 1/,
+    );
+  }
+
   for (const [key, val] of badCases) {
     const req = { ...baseReq, [key]: val };
     await assert.rejects(

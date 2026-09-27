@@ -382,6 +382,214 @@ class NotebookWorkerContractTests(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, "NotebookLM URL"):
                         validate_notebook_request(invalid)
 
+    def test_schema_version_validation(self):
+        from workflow_automation.contracts import (
+            validate_notebook_generation_receipt,
+            validate_notebook_generation_request,
+            validate_notebook_receipt,
+            validate_notebook_request,
+        )
+
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            req = {
+                "schema_version": 2,
+                "request_id": "r1",
+                "story_id": "s1",
+                "notebook_url": "https://notebook.google.com/notebook/example",
+                "artifact_title": "Short overview",
+                "allow_root": str(root),
+                "output_path": str(root / "out.mp4"),
+            }
+            with self.assertRaisesRegex(ValueError, "schema_version must be 1"):
+                validate_notebook_request(req)
+
+            gen_req = {
+                "schema_version": 99,
+                "request_id": "r1",
+                "story_id": "s1",
+                "request_token": "tok",
+                "notebook_url": "https://notebook.google.com/notebook/example",
+                "artifact_title": "Short overview",
+                "focus_prompt": "Focus",
+                "allow_root": str(root),
+                "receipt_path": str(root / "receipt.json"),
+            }
+            with self.assertRaisesRegex(ValueError, "schema_version must be 1"):
+                validate_notebook_generation_request(gen_req)
+
+            receipt = {
+                "schema_version": 0,
+                "request_id": "r1",
+                "story_id": "s1",
+                "status": "done",
+                "output_path": str(root / "out.mp4"),
+                "artifact": {
+                    "size_bytes": 1,
+                    "container": "mp4",
+                    "duration_seconds": 1,
+                    "dimensions": {"width": 1, "height": 1},
+                    "codecs": {"video": "h264", "audio": None},
+                    "sha256": "a" * 64,
+                },
+                "evidence": {"checked": True},
+            }
+            with self.assertRaisesRegex(ValueError, "schema_version must be 1"):
+                validate_notebook_receipt(receipt)
+
+            gen_receipt = {
+                "schema_version": 5,
+                "request_id": "r1",
+                "story_id": "s1",
+                "request_token": "tok",
+                "status": "queued",
+                "artifact_title": "Short overview",
+                "notebook_url": "https://notebook.google.com/notebook/example",
+                "video_format": "Short",
+                "timestamp": "2026-09-27T00:00:00Z",
+                "evidence": {
+                    "generation_only": True,
+                    "download_attempted": False,
+                    "generation_state": "queued",
+                },
+            }
+            with self.assertRaisesRegex(ValueError, "schema_version must be 1"):
+                validate_notebook_generation_receipt(gen_receipt)
+
+    def test_generation_request_optional_fields_validation(self):
+        from workflow_automation.contracts import validate_notebook_generation_request
+
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            base_gen_req = {
+                "schema_version": 1,
+                "request_id": "r1",
+                "story_id": "s1",
+                "request_token": "tok",
+                "notebook_url": "https://notebook.google.com/notebook/example",
+                "artifact_title": "Short overview",
+                "focus_prompt": "Focus",
+                "allow_root": str(root),
+                "receipt_path": str(root / "receipt.json"),
+            }
+            # Invalid cdp_url
+            for bad_cdp in ("not-a-url", "ftp://localhost:9222", 123, ""):
+                with self.subTest(bad_cdp=bad_cdp):
+                    invalid = dict(base_gen_req, cdp_url=bad_cdp)
+                    with self.assertRaises(ValueError):
+                        validate_notebook_generation_request(invalid)
+
+            # Valid cdp_url
+            valid_cdp = dict(base_gen_req, cdp_url="http://127.0.0.1:9222")
+            validate_notebook_generation_request(valid_cdp)
+
+            # Invalid timestamp
+            for bad_ts in (123, "", "   "):
+                with self.subTest(bad_ts=bad_ts):
+                    invalid = dict(base_gen_req, timestamp=bad_ts)
+                    with self.assertRaisesRegex(ValueError, "timestamp"):
+                        validate_notebook_generation_request(invalid)
+
+            # Invalid request_token
+            for bad_token in (123, "", "   "):
+                with self.subTest(bad_token=bad_token):
+                    invalid = dict(base_gen_req, request_token=bad_token)
+                    with self.assertRaisesRegex(ValueError, "request_token"):
+                        validate_notebook_generation_request(invalid)
+
+    def test_receipt_identity_verification_in_handoff_and_ingestion(self):
+        from workflow_automation.handoff import handoff_notebooklm_video
+        from workflow_automation.notebook import ingest_download_receipt
+
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            allowed = root / "allowed"
+            allowed.mkdir()
+            source = allowed / "video.mp4"
+            source.write_bytes(b"dummy video content for receipt test")
+            receipt = {
+                "schema_version": 1,
+                "request_id": "req-1",
+                "story_id": "story-1",
+                "status": "done",
+                "notebook_url": "https://notebook.google.com/notebook/example",
+                "output_path": str(source),
+                "allow_root": str(allowed),
+                "artifact": {
+                    "size_bytes": len(source.read_bytes()),
+                    "container": "mp4",
+                    "duration_seconds": 1.0,
+                    "dimensions": {"width": 10, "height": 10},
+                    "codecs": {"video": "h264", "audio": None},
+                    "sha256": "0" * 64,
+                },
+                "evidence": {
+                    "artifact_title": "Title 1",
+                    "local_worker": True,
+                },
+            }
+            receipt_path = root / "receipt.json"
+            receipt_path.write_text(json.dumps(receipt))
+
+            # Missing receipt file
+            missing_receipt = root / "missing.json"
+            with self.assertRaises(FileNotFoundError):
+                ingest_download_receipt(missing_receipt, allow_root=allowed)
+            with self.assertRaises(FileNotFoundError):
+                handoff_notebooklm_video(
+                    missing_receipt,
+                    allowed_output_root=allowed,
+                    handoff_root=root / "handoff",
+                )
+
+            # Mismatched request_id
+            with self.assertRaisesRegex(ValueError, "request_id mismatch"):
+                ingest_download_receipt(
+                    receipt_path,
+                    allow_root=allowed,
+                    expected_request_id="req-2",
+                )
+            with self.assertRaisesRegex(ValueError, "request_id mismatch"):
+                handoff_notebooklm_video(
+                    receipt_path,
+                    allowed_output_root=allowed,
+                    handoff_root=root / "handoff",
+                    expected_request_id="req-2",
+                )
+
+            # Mismatched story_id
+            with self.assertRaisesRegex(ValueError, "story_id mismatch"):
+                ingest_download_receipt(
+                    receipt_path,
+                    allow_root=allowed,
+                    expected_story_id="story-2",
+                )
+            with self.assertRaisesRegex(ValueError, "story_id mismatch"):
+                handoff_notebooklm_video(
+                    receipt_path,
+                    allowed_output_root=allowed,
+                    handoff_root=root / "handoff",
+                    expected_story_id="story-2",
+                )
+
+            # Mismatched artifact_title
+            with self.assertRaisesRegex(ValueError, "artifact_title mismatch"):
+                handoff_notebooklm_video(
+                    receipt_path,
+                    allowed_output_root=allowed,
+                    handoff_root=root / "handoff",
+                    expected_artifact_title="Title 2",
+                )
+
+            # Mismatched notebook_url
+            with self.assertRaisesRegex(ValueError, "notebook_url mismatch"):
+                handoff_notebooklm_video(
+                    receipt_path,
+                    allowed_output_root=allowed,
+                    handoff_root=root / "handoff",
+                    expected_notebook_url="https://notebook.google.com/notebook/other",
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

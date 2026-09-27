@@ -42,6 +42,7 @@ export function validateNotebookUrl(value) {
  return url.toString();
 }
 export async function validate(req){
+ if(req.schema_version!==undefined&&req.schema_version!==1)fail('schema_version must be 1');
  for(const k of REQUIRED){
    if(typeof req[k]!=='string'||!req[k].trim())fail(`${k} must be a non-empty string`);
  }

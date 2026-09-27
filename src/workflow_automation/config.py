@@ -51,21 +51,29 @@ class Config:
                 else tuple(shlex.split(str(raw)))
             )
 
-        project_root = Path(val("project_root", str(DEFAULT_PROJECT_ROOT)))
-        state_dir = Path(val("state_dir", str(Path.cwd() / "state")))
-        request_dir = Path(val("notebooklm_request_dir", str(state_dir / "notebooklm-requests")))
-        output_root = Path(
-            val("notebooklm_output_root", str(project_root / "downloads" / "notebooklm"))
+        def resolve_fs_path(raw: str, base: Path) -> Path:
+            p = Path(raw).expanduser()
+            if not p.is_absolute():
+                p = base / p
+            return p.resolve()
+
+        project_root = Path(val("project_root", str(DEFAULT_PROJECT_ROOT))).expanduser().resolve()
+        state_dir = resolve_fs_path(val("state_dir", "state"), project_root)
+        request_dir = resolve_fs_path(
+            val("notebooklm_request_dir", "notebooklm-requests"), state_dir
+        )
+        output_root = resolve_fs_path(
+            val("notebooklm_output_root", "downloads/notebooklm"), project_root
         )
         cdp_url_raw = val("notebooklm_cdp_url", "")
         branded_outro_raw = val("branded_outro_path", "")
         return Config(
             project_root,
-            Path(val("sources_path", str(project_root / "data" / "sources.json"))),
-            Path(val("stories_path", str(project_root / "data" / "stories.json"))),
-            Path(val("content_root", str(project_root / "content-pipeline"))),
+            resolve_fs_path(val("sources_path", "data/sources.json"), project_root),
+            resolve_fs_path(val("stories_path", "data/stories.json"), project_root),
+            resolve_fs_path(val("content_root", "content-pipeline"), project_root),
             state_dir,
-            Path(val("lock_path", str(state_dir / "workflow.lock"))),
+            resolve_fs_path(val("lock_path", "workflow.lock"), state_dir),
             val("ffprobe_bin", "ffprobe"),
             val("ffmpeg_bin", "ffmpeg"),
             cmd("extractor"),
@@ -79,7 +87,7 @@ class Config:
             request_dir,
             output_root,
             cdp_url_raw or None,
-            Path(branded_outro_raw) if branded_outro_raw else None,
+            resolve_fs_path(branded_outro_raw, project_root) if branded_outro_raw else None,
             int(val("max_retries", "3")),
         )
 

@@ -53,6 +53,8 @@ def ingest_generation_receipt(
     story_id: str,
     request_token: str,
 ) -> dict[str, Any]:
+    if not path.is_file():
+        raise FileNotFoundError(f"notebook generation receipt not found: {path}")
     receipt = json.loads(path.read_text())
     validate_notebook_generation_receipt(receipt)
     expected = {
@@ -111,10 +113,24 @@ def write_download_request(
 
 
 def ingest_download_receipt(
-    path: Path, *, allow_root: Path | str
+    path: Path,
+    *,
+    allow_root: Path | str,
+    expected_request_id: str | None = None,
+    expected_story_id: str | None = None,
 ) -> dict[str, Any]:
+    if not path.is_file():
+        raise FileNotFoundError(f"notebook download receipt not found: {path}")
     data = json.loads(path.read_text())
     validate_notebook_receipt_containment(data, allow_root)
+    if expected_request_id is not None and data.get("request_id") != expected_request_id:
+        raise ValueError(
+            f"download receipt request_id mismatch: expected {expected_request_id}, got {data.get('request_id')}"
+        )
+    if expected_story_id is not None and data.get("story_id") != expected_story_id:
+        raise ValueError(
+            f"download receipt story_id mismatch: expected {expected_story_id}, got {data.get('story_id')}"
+        )
     artifact = dict(data["artifact"])
     artifact["output_path"] = data.get("output_path")
     if "allow_root" in data:

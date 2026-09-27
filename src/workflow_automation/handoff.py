@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import tempfile
@@ -83,6 +84,10 @@ def handoff_notebooklm_video(
     *,
     allowed_output_root: Path,
     handoff_root: Path,
+    expected_request_id: str | None = None,
+    expected_story_id: str | None = None,
+    expected_notebook_url: str | None = None,
+    expected_artifact_title: str | None = None,
     ffprobe_bin: str = "ffprobe",
 ) -> dict[str, Any]:
     """Verify a worker receipt and atomically hand its video to the deterministic pipeline.
@@ -90,7 +95,30 @@ def handoff_notebooklm_video(
     The handoff deliberately copies rather than moves the HP-produced artifact, so a failed
     downstream outro/package operation cannot destroy the worker's independently verified output.
     """
-    artifact = ingest_download_receipt(receipt_path, allow_root=allowed_output_root)
+    artifact = ingest_download_receipt(
+        receipt_path,
+        allow_root=allowed_output_root,
+        expected_request_id=expected_request_id,
+        expected_story_id=expected_story_id,
+    )
+    receipt_data = json.loads(receipt_path.read_text())
+    evidence = receipt_data.get("evidence", {})
+    if (
+        expected_artifact_title is not None
+        and "artifact_title" in evidence
+        and evidence["artifact_title"] != expected_artifact_title
+    ):
+        raise ValueError(
+            f"download receipt evidence artifact_title mismatch: expected {expected_artifact_title}, got {evidence['artifact_title']}"
+        )
+    if (
+        expected_notebook_url is not None
+        and "notebook_url" in receipt_data
+        and receipt_data["notebook_url"] != expected_notebook_url
+    ):
+        raise ValueError(
+            f"download receipt notebook_url mismatch: expected {expected_notebook_url}, got {receipt_data['notebook_url']}"
+        )
     raw_path = artifact.get("output_path")
     if not raw_path:
         raise ValueError("notebook download receipt missing output_path")
@@ -125,5 +153,9 @@ def handoff_notebooklm_video(
         "media": media,
         "handed_off_at": utcnow(),
     }
+    if "artifact_title" in evidence:
+        handoff["artifact_title"] = evidence["artifact_title"]
+    if "notebook_url" in receipt_data:
+        handoff["notebook_url"] = receipt_data["notebook_url"]
     atomic_json(handoff_root / "handoff.json", handoff)
     return handoff

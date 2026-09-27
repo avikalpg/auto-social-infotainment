@@ -56,6 +56,8 @@ def _absolute_contained_path(value: Any, root: Path, field: str) -> Path:
 
 
 def _validate_notebook_url(value: str) -> None:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("notebook_url must be a non-empty string")
     notebook_url = urlsplit(value)
     if (
         notebook_url.scheme != "https"
@@ -68,9 +70,22 @@ def _validate_notebook_url(value: str) -> None:
         or not re.fullmatch(r"/notebook/[^/]+/?", notebook_url.path)
     ):
         raise ValueError("notebook_url must be a NotebookLM URL without query parameters")
+    authority = re.match(r"^https://([^/]+)", value)
+    if not authority or authority.group(1) != "notebook.google.com":
+        raise ValueError("notebook_url must be a NotebookLM URL without query parameters")
+
+
+def _validate_http_url(value: Any, field: str) -> None:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field} must be a non-empty string")
+    split = urlsplit(value)
+    if split.scheme not in {"http", "https"} or not split.hostname:
+        raise ValueError(f"{field} must be an HTTP(S) URL")
 
 
 def validate_notebook_generation_request(data: dict[str, Any]) -> None:
+    if "schema_version" in data and data["schema_version"] != 1:
+        raise ValueError("notebook generation request schema_version must be 1")
     allowed = {
         "schema_version",
         "request_id",
@@ -102,6 +117,12 @@ def validate_notebook_generation_request(data: dict[str, Any]) -> None:
         value = data.get(key)
         if not isinstance(value, str) or not value.strip():
             raise ValueError(f"notebook generation request {key} must be a non-empty string")
+    if "timestamp" in data and (
+        not isinstance(data["timestamp"], str) or not data["timestamp"].strip()
+    ):
+        raise ValueError("notebook generation request timestamp must be a non-empty string")
+    if "cdp_url" in data:
+        _validate_http_url(data["cdp_url"], "cdp_url")
     _validate_notebook_url(data["notebook_url"])
     allow_root = Path(data["allow_root"])
     if not allow_root.is_absolute():
@@ -110,6 +131,8 @@ def validate_notebook_generation_request(data: dict[str, Any]) -> None:
 
 
 def validate_notebook_generation_receipt(data: dict[str, Any]) -> None:
+    if "schema_version" in data and data["schema_version"] != 1:
+        raise ValueError("notebook generation receipt schema_version must be 1")
     require_keys(
         data,
         {
@@ -140,6 +163,8 @@ def validate_notebook_generation_receipt(data: dict[str, Any]) -> None:
 
 
 def validate_notebook_request(data: dict[str, Any]) -> None:
+    if "schema_version" in data and data["schema_version"] != 1:
+        raise ValueError("notebook download request schema_version must be 1")
     allowed = {
         "schema_version",
         "request_id",
@@ -180,6 +205,16 @@ def validate_notebook_request(data: dict[str, Any]) -> None:
     _absolute_contained_path(data["output_path"], allow_root, "output_path")
     if "receipt_path" in data:
         _absolute_contained_path(data["receipt_path"], allow_root, "receipt_path")
+    if "cdp_url" in data:
+        _validate_http_url(data["cdp_url"], "cdp_url")
+    if "timestamp" in data and (
+        not isinstance(data["timestamp"], str) or not data["timestamp"].strip()
+    ):
+        raise ValueError("timestamp must be a non-empty string")
+    if "ffprobe_bin" in data and (
+        not isinstance(data["ffprobe_bin"], str) or not data["ffprobe_bin"].strip()
+    ):
+        raise ValueError("ffprobe_bin must be a non-empty string")
     if "expected_format" in data and (
         not isinstance(data["expected_format"], str) or not data["expected_format"].strip()
     ):
@@ -207,6 +242,8 @@ def validate_notebook_receipt(
     Use `validate_notebook_receipt_containment(data, allow_root)` for strict,
     mandatory containment validation.
     """
+    if "schema_version" in data and data["schema_version"] != 1:
+        raise ValueError("notebook download receipt schema_version must be 1")
     require_keys(
         data,
         {"request_id", "story_id", "status", "output_path", "artifact", "evidence"},

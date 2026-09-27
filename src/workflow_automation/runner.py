@@ -43,6 +43,16 @@ def run_stage(state: StoryState, stage: str, cfg: Config, dry_run: bool = False)
     rec.attempts += 1
     rec.status = "running"
     rec.updated_at = utcnow()
+    try:
+        _execute_stage(state, stage, cfg, dry_run=dry_run)
+    except Exception as exc:
+        rec.status = "failed"
+        rec.error = str(exc)
+        rec.updated_at = utcnow()
+        raise
+
+
+def _execute_stage(state: StoryState, stage: str, cfg: Config, dry_run: bool = False) -> None:
     if stage == "extracted":
         mark_done(state, stage, {"dry_run": dry_run, "source_keys": sorted(state.source.keys())})
         return
@@ -131,14 +141,22 @@ def run_stage(state: StoryState, stage: str, cfg: Config, dry_run: bool = False)
             "HP-local NotebookLM Playwright worker", cfg.notebooklm_worker_cmd
         ).run([str(req_path)], dry_run)
         if not dry_run:
+            expected_req_id = f"notebooklm-{state.story_id}"
             artifact = ingest_download_receipt(
-                receipt_path, allow_root=cfg.notebooklm_output_root
+                receipt_path,
+                allow_root=cfg.notebooklm_output_root,
+                expected_request_id=expected_req_id,
+                expected_story_id=state.story_id,
             )
             handoff_root = cfg.content_root / ".handoff" / state.story_id
             handoff = handoff_notebooklm_video(
                 receipt_path,
                 allowed_output_root=cfg.notebooklm_output_root,
                 handoff_root=handoff_root,
+                expected_request_id=expected_req_id,
+                expected_story_id=state.story_id,
+                expected_notebook_url=str(src["notebook_url"]),
+                expected_artifact_title=str(src["artifact_title"]),
                 ffprobe_bin=cfg.ffprobe_bin,
             )
             final_video = handoff_root / "final-with-branded-outro.mp4"

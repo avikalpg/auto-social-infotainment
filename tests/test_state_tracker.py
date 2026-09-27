@@ -190,6 +190,82 @@ class StateTrackerTests(unittest.TestCase):
             self.assertIsNone(cfg.notebooklm_cdp_url)
             self.assertIsNone(cfg.branded_outro_path)
 
+    def test_run_stage_direct_exception_marks_stage_failed(self):
+        from workflow_automation.runner import run_stage
+
+        state = StoryState("STR-direct-fail")
+        cfg = SimpleNamespace(
+            max_retries=3,
+            sources_path=Path("/tmp/sources.json"),
+        )
+        # video_queued stage requires notebook_url, artifact_title, focus_prompt in source
+        # Calling without them raises RuntimeError and must update state record to failed
+        with self.assertRaisesRegex(RuntimeError, "missing NotebookLM fields"):
+            run_stage(state, "video_queued", cfg)
+
+        rec = state.stages["video_queued"]
+        self.assertEqual(rec.status, "failed")
+        self.assertIn("missing NotebookLM fields", str(rec.error))
+        self.assertIsNotNone(rec.updated_at)
+
+    def test_config_resolves_relative_and_user_paths(self):
+        from workflow_automation.config import Config
+
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            cfg_file = root / "config.json"
+            cfg_file.write_text(
+                json.dumps(
+                    {
+                        "project_root": str(root / "my_project"),
+                        "state_dir": "custom_state",
+                        "notebooklm_request_dir": "custom_requests",
+                        "notebooklm_output_root": "custom_downloads",
+                        "sources_path": "custom_sources.json",
+                        "stories_path": "custom_stories.json",
+                        "content_root": "custom_content",
+                        "lock_path": "custom.lock",
+                        "branded_outro_path": "custom_outro.mp4",
+                    }
+                )
+            )
+            cfg = Config.load(cfg_file)
+
+            expected_project_root = (root / "my_project").resolve()
+            expected_state_dir = (expected_project_root / "custom_state").resolve()
+            self.assertEqual(cfg.project_root, expected_project_root)
+            self.assertEqual(cfg.state_dir, expected_state_dir)
+            self.assertEqual(
+                cfg.notebooklm_request_dir,
+                (expected_state_dir / "custom_requests").resolve(),
+            )
+            self.assertEqual(
+                cfg.notebooklm_output_root,
+                (expected_project_root / "custom_downloads").resolve(),
+            )
+            self.assertEqual(
+                cfg.sources_path,
+                (expected_project_root / "custom_sources.json").resolve(),
+            )
+            self.assertEqual(
+                cfg.stories_path,
+                (expected_project_root / "custom_stories.json").resolve(),
+            )
+            self.assertEqual(
+                cfg.content_root,
+                (expected_project_root / "custom_content").resolve(),
+            )
+            self.assertEqual(
+                cfg.lock_path,
+                (expected_state_dir / "custom.lock").resolve(),
+            )
+            self.assertEqual(
+                cfg.branded_outro_path,
+                (expected_project_root / "custom_outro.mp4").resolve(),
+            )
+            self.assertTrue(cfg.notebooklm_output_root.is_absolute())
+            self.assertTrue(cfg.notebooklm_request_dir.is_absolute())
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -198,6 +198,11 @@ class NotebookWorkerContractTests(unittest.TestCase):
                     invalid = dict(base_request, **{key: bad_val})
                     with self.assertRaisesRegex(ValueError, f"{key} must be a non-empty string"):
                         validate_notebook_request(invalid)
+            for duration in (True, False, 0, -1):
+                with self.subTest(expected_duration_seconds=duration):
+                    invalid = dict(base_request, expected_duration_seconds=duration)
+                    with self.assertRaisesRegex(ValueError, "expected_duration_seconds"):
+                        validate_notebook_request(invalid)
 
     def test_receipt_containment_validation(self):
         from workflow_automation.contracts import (
@@ -369,6 +374,8 @@ class NotebookWorkerContractTests(unittest.TestCase):
                 "https://notebook.google.com@evil.example/notebook/example",
                 "https://notebook.google.com/notebookish/example",
                 "http://notebook.google.com/notebook/example",
+                "https://notebook.google.com/notebook/example?redirect=evil",
+                "https://notebook.google.com:443/notebook/example",
             ):
                 with self.subTest(url=malicious_url):
                     invalid = dict(request, notebook_url=malicious_url)

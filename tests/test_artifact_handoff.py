@@ -242,6 +242,7 @@ class ArtifactHandoffTests(unittest.TestCase):
                 },
             )
             state.artifacts["wispr_final_script"] = "Wispr narrative script."
+            state.stages["video_queued"].status = "done"
 
             run_stage(state, "video_produced", cfg, dry_run=False)
 

@@ -20,7 +20,9 @@ NotebookLM rule: production video generation must run through an HP-local Playwr
 
 `workers/notebooklm/hp-notebooklm-generation-worker.mjs` is generation-only and is separate from the download worker. It connects to the authenticated HP Chrome CDP endpoint, reuses or navigates to the supplied notebook, configures a **Short** Video Overview with the supplied `focus_prompt`, and writes an atomic receipt only after NotebookLM visibly reports the request as queued or generating. It embeds a unique request/story token (`request_token` or `story_id`) into the prompt submitted to NotebookLM and requires both the artifact title and the unique request token to be visibly present before matching an existing queued item. It does not wait for completion or download anything.
 
-Its request is strict JSON: `request_id`, `story_id`, `notebook_url` (an `https://notebook.google.com/notebook/...` URL), `artifact_title`, `focus_prompt`, absolute `allow_root`, and an absolute `receipt_path` contained by `allow_root`; optional keys are `schema_version: 1`, `request_token`, `cdp_url`, and `timestamp`. The receipt has `status: "queued"` (or `"error"`), fixed `video_format: "Short"`, and evidence including `already_queued`, the visible generation state, and `download_attempted: false`.
+Its request is strict JSON: `request_id`, `story_id`, `notebook_url` (an `https://notebook.google.com/notebook/...` URL without query parameters), `artifact_title`, `focus_prompt`, absolute `allow_root`, and an absolute `receipt_path` contained by `allow_root`; optional keys are `schema_version: 1`, `request_token`, `cdp_url`, and `timestamp`. The receipt has `status: "queued"` (or `"error"`), fixed `video_format: "Short"`, and evidence including `already_queued`, the visible generation state, and `download_attempted: false`.
+
+The workflow integrates generation as the `video_queued` stage. `queue-video` writes the generation request, invokes `notebooklm_generation_worker_cmd`, validates the request-specific queued receipt, and persists that evidence. `produce-video` refuses to start the download stage until `video_queued` is done, so asynchronous NotebookLM generation remains an explicit resumable boundary. Stories must provide `notebook_url`, `artifact_title`, and `focus_prompt` before queueing.
 
 ```bash
 node workers/notebooklm/hp-notebooklm-generation-worker.mjs request.json
@@ -39,6 +41,7 @@ node workers/notebooklm/hp-notebooklm-generation-worker.mjs request.json
 
 ```bash
 workflow-automation extract-candidate-pairs --source-id SRC-001 [--dry-run]
+workflow-automation queue-video [--story-id ID] [--dry-run]
 workflow-automation produce-video [--story-id ID] [--dry-run]
 workflow-automation publish-instagram [--story-id ID] [--dry-run]
 workflow-automation publish-x [--story-id ID] [--dry-run]
@@ -66,7 +69,7 @@ ruff check .
 
 ## Production vertical slice (deterministic)
 
-This slice is deterministic and does not perform live browser posting. Configure generic adapter commands in `config/config.example.json` or via environment variables such as `WA_EXTRACTOR_CMD` and `WA_NOTEBOOKLM_WORKER_CMD`.
+This slice is deterministic and does not perform live browser posting. Configure generic adapter commands in `config/config.example.json` or via environment variables such as `WA_EXTRACTOR_CMD`, `WA_NOTEBOOKLM_GENERATION_WORKER_CMD`, and `WA_NOTEBOOKLM_WORKER_CMD`.
 
 Key commands:
 

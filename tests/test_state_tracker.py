@@ -5,6 +5,7 @@ from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from workflow_automation.cli import _hydrate_notebook_source, resume
 from workflow_automation.media import verify_audio_hash
@@ -104,6 +105,37 @@ class StateTrackerTests(unittest.TestCase):
             self.assertEqual(result["status"], "done")
             self.assertEqual(store.load("story-001").stages["extracted"].status, "done")
             self.assertNotEqual(result.get("status"), "complete")
+
+    def test_resume_persists_extraction_failure_while_lock_is_held(self):
+        from workflow_automation.errors import ExitCode
+
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            store = StateStore(root / "state")
+            state = StoryState("story-locked-failure")
+            store.save(state)
+            cfg = SimpleNamespace(
+                state_dir=store.state_dir,
+                lock_path=root / "workflow.lock",
+                max_retries=3,
+                validate=list,
+            )
+            args = SimpleNamespace(story_id=state.story_id, dry_run=False)
+            original_save = StateStore.save
+
+            def save_while_locked(current_store, current_state):
+                self.assertTrue(cfg.lock_path.exists())
+                return original_save(current_store, current_state)
+
+            with (
+                patch("workflow_automation.cli.run_stage", side_effect=RuntimeError("boom")),
+                patch.object(StateStore, "save", autospec=True, side_effect=save_while_locked),
+            ):
+                self.assertEqual(resume(args, cfg), ExitCode.SUBPROCESS)
+
+            failed = store.load(state.story_id)
+            self.assertEqual(failed.stages["extracted"].status, "failed")
+            self.assertEqual(failed.stages["extracted"].error, "boom")
 
     def test_load_or_create_hydrates_existing_state(self):
         from workflow_automation.cli import load_or_create

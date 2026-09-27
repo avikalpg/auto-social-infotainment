@@ -5,11 +5,65 @@ from pathlib import Path
 from typing import Any
 
 from .contracts import (
+    validate_notebook_generation_receipt,
+    validate_notebook_generation_request,
     validate_notebook_receipt_containment,
     validate_notebook_request,
 )
 from .packages import atomic_json
 from .state import utcnow
+
+
+def write_generation_request(
+    path: Path,
+    *,
+    request_id: str,
+    story_id: str,
+    request_token: str,
+    notebook_url: str,
+    artifact_title: str,
+    focus_prompt: str,
+    receipt_path: Path,
+    allow_root: Path,
+    cdp_url: str | None = None,
+) -> dict[str, Any]:
+    request: dict[str, Any] = {
+        "schema_version": 1,
+        "request_id": request_id,
+        "story_id": story_id,
+        "request_token": request_token,
+        "notebook_url": notebook_url,
+        "artifact_title": artifact_title,
+        "focus_prompt": focus_prompt,
+        "receipt_path": str(receipt_path),
+        "allow_root": str(allow_root),
+        "timestamp": utcnow(),
+    }
+    if cdp_url:
+        request["cdp_url"] = cdp_url
+    validate_notebook_generation_request(request)
+    atomic_json(path, request)
+    return request
+
+
+def ingest_generation_receipt(
+    path: Path,
+    *,
+    request_id: str,
+    story_id: str,
+    request_token: str,
+) -> dict[str, Any]:
+    receipt = json.loads(path.read_text())
+    validate_notebook_generation_receipt(receipt)
+    expected = {
+        "request_id": request_id,
+        "story_id": story_id,
+        "request_token": request_token,
+    }
+    for key, value in expected.items():
+        if receipt[key] != value:
+            raise ValueError(f"notebook generation receipt {key} does not match request")
+    return receipt
 
 
 def write_download_request(

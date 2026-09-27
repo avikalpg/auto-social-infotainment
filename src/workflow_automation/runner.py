@@ -7,11 +7,17 @@ from .captions import read_generated_caption, write_caption_request
 from .config import Config
 from .handoff import handoff_notebooklm_video
 from .media import append_branded_outro_preserve_audio, verify_audio_hash
-from .notebook import ingest_download_receipt, write_download_request
+from .notebook import (
+    ingest_download_receipt,
+    ingest_generation_receipt,
+    write_download_request,
+    write_generation_request,
+)
 from .packages import create_content_package, validate_content_package
 from .state import StoryState, utcnow
 
 STAGE_TO_ADAPTER = {
+    "video_queued": "notebooklm_generation_worker_cmd",
     "video_produced": "notebooklm_worker_cmd",
     "instagram_published": "instagram_cmd",
     "x_published": "x_cmd",
@@ -40,7 +46,50 @@ def run_stage(state: StoryState, stage: str, cfg: Config, dry_run: bool = False)
     if stage == "extracted":
         mark_done(state, stage, {"dry_run": dry_run, "source_keys": sorted(state.source.keys())})
         return
+    if stage == "video_queued":
+        src = state.source
+        required = ["notebook_url", "artifact_title", "focus_prompt"]
+        missing = [key for key in required if not str(src.get(key) or "").strip()]
+        if missing:
+            raise RuntimeError(f"story source missing NotebookLM fields: {', '.join(missing)}")
+        request_id = f"notebooklm-generation-{state.story_id}"
+        request_token = str(src.get("request_token") or request_id)
+        request_path = cfg.notebooklm_request_dir / f"{state.story_id}.generation.request.json"
+        receipt_path = cfg.notebooklm_request_dir / f"{state.story_id}.generation.receipt.json"
+        request = write_generation_request(
+            request_path,
+            request_id=request_id,
+            story_id=state.story_id,
+            request_token=request_token,
+            notebook_url=str(src["notebook_url"]),
+            artifact_title=str(src["artifact_title"]),
+            focus_prompt=str(src["focus_prompt"]),
+            receipt_path=receipt_path,
+            allow_root=cfg.notebooklm_request_dir,
+            cdp_url=cfg.notebooklm_cdp_url,
+        )
+        result = CommandAdapter(
+            "HP-local NotebookLM generation worker", cfg.notebooklm_generation_worker_cmd
+        ).run([str(request_path)], dry_run)
+        result["request"] = request
+        if not dry_run:
+            receipt = ingest_generation_receipt(
+                receipt_path,
+                request_id=request_id,
+                story_id=state.story_id,
+                request_token=request_token,
+            )
+            if receipt["artifact_title"] != src["artifact_title"]:
+                raise ValueError("notebook generation receipt artifact_title does not match request")
+            if receipt["notebook_url"] != src["notebook_url"]:
+                raise ValueError("notebook generation receipt notebook_url does not match request")
+            result["receipt"] = receipt
+            state.artifacts["generation_receipt_path"] = str(receipt_path)
+        mark_done(state, stage, result)
+        return
     if stage == "video_produced":
+        if state.stages["video_queued"].status != "done":
+            raise RuntimeError("NotebookLM generation must be queued before video download")
         # NotebookLM rule: only an HP-local Playwright worker may touch NotebookLM/downloads;
         # Azure-side code never downloads audio/video and must preserve audio bytes byte-for-byte.
         src = state.source

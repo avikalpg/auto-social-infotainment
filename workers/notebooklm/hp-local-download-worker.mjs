@@ -35,7 +35,8 @@ export function validateNotebookUrl(value) {
  if(typeof value!=='string'||!value.trim()) fail('notebook_url must be a NotebookLM URL');
  let url;
  try { url = new URL(value); } catch { fail('notebook_url must be a NotebookLM URL'); }
- if(url.protocol!=='https:'||url.hostname!=='notebook.google.com') fail('notebook_url must be a NotebookLM URL');
+ const authority=value.match(/^https:\/\/([^/]+)/)?.[1];
+ if(url.protocol!=='https:'||url.hostname!=='notebook.google.com'||authority!=='notebook.google.com'||url.search) fail('notebook_url must be a NotebookLM URL');
  if(!/^\/notebook\/[^/]+\/?$/.test(url.pathname)) fail('notebook_url must be a NotebookLM URL');
  if(url.username||url.password||url.hash) fail('notebook_url must be a NotebookLM URL');
  return url.toString();
@@ -46,6 +47,7 @@ export async function validate(req){
  }
  const extra=Object.keys(req).filter(k=>!ALLOWED.has(k));if(extra.length)fail(`unsupported request keys: ${extra.sort().join(', ')}`);
  validateNotebookUrl(req.notebook_url);
+ if(req.expected_duration_seconds!==undefined&&(typeof req.expected_duration_seconds!=='number'||!Number.isFinite(req.expected_duration_seconds)||req.expected_duration_seconds<=0))fail('expected_duration_seconds must be a positive number');
  req.output_path=await safePath(req.output_path,req.allow_root,'output_path');
  req.receipt_path=await safePath(req.receipt_path||path.join(req.allow_root,`${req.request_id}.receipt.json`),req.allow_root,'receipt_path');
 }

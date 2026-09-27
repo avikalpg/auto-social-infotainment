@@ -11,6 +11,7 @@ from typing import Any
 
 STAGES = [
     "extracted",
+    "video_queued",
     "video_produced",
     "instagram_published",
     "x_published",

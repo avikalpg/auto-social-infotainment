@@ -20,6 +20,7 @@ class Config:
     ffprobe_bin: str
     ffmpeg_bin: str
     extractor_cmd: tuple[str, ...] | None
+    notebooklm_generation_worker_cmd: tuple[str, ...] | None
     notebooklm_worker_cmd: tuple[str, ...] | None
     caption_generator_cmd: tuple[str, ...] | None
     instagram_cmd: tuple[str, ...] | None
@@ -68,6 +69,7 @@ class Config:
             val("ffprobe_bin", "ffprobe"),
             val("ffmpeg_bin", "ffmpeg"),
             cmd("extractor"),
+            cmd("notebooklm_generation_worker"),
             cmd("notebooklm_worker"),
             cmd("caption_generator"),
             cmd("instagram"),

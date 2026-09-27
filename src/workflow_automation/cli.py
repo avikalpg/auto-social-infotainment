@@ -18,6 +18,7 @@ from .tracker import find_source, find_story, select_next_story, story_id
 
 LOG = logging.getLogger("workflow_automation")
 CMD_STAGE = {
+    "queue-video": "video_queued",
     "produce-video": "video_produced",
     "publish-instagram": "instagram_published",
     "publish-x": "x_published",
@@ -187,11 +188,18 @@ def resume(args: argparse.Namespace, cfg: Config) -> int:
                     return ExitCode.CONFIG
                 try:
                     with FileLock(cfg.lock_path):
-                        # Reload while holding the lock so a concurrent command cannot leave the
-                        # canonical first stage pending after resume returns successfully.
-                        st = load_or_create(store, cfg, st.story_id)
-                        run_stage(st, stage, cfg, args.dry_run)
-                        store.save(st)
+                        try:
+                            # Reload while holding the lock so a concurrent command cannot leave
+                            # the canonical first stage pending after resume returns successfully.
+                            st = load_or_create(store, cfg, st.story_id)
+                            run_stage(st, stage, cfg, args.dry_run)
+                            store.save(st)
+                        except Exception as error:
+                            st.stages[stage].status = "failed"
+                            st.stages[stage].error = str(error)
+                            st.stages[stage].updated_at = utcnow()
+                            store.save(st)
+                            raise
                     print(
                         json.dumps(
                             {
@@ -205,12 +213,7 @@ def resume(args: argparse.Namespace, cfg: Config) -> int:
                 except LockError as e:
                     print(str(e), file=sys.stderr)
                     return ExitCode.LOCKED
-                except Exception as e:
-                    if "st" in locals():
-                        st.stages[stage].status = "failed"
-                        st.stages[stage].error = str(e)
-                        st.stages[stage].updated_at = utcnow()
-                        store.save(st)
+                except Exception:
                     LOG.exception("stage failed", extra={"stage": stage})
                     return ExitCode.SUBPROCESS
             args.command = next(k for k, v in CMD_STAGE.items() if v == stage)

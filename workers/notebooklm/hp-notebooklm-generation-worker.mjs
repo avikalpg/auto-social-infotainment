@@ -68,8 +68,14 @@ export function validateNotebookUrl(value) {
   } catch {
     throw new Error('notebook_url must be a NotebookLM URL');
   }
-  if (url.protocol !== 'https:' || url.hostname !== 'notebook.google.com') {
-    throw new Error('notebook_url must be a NotebookLM https URL');
+  const authority = value.match(/^https:\/\/([^/]+)/)?.[1];
+  if (
+    url.protocol !== 'https:' ||
+    url.hostname !== 'notebook.google.com' ||
+    authority !== 'notebook.google.com' ||
+    url.search
+  ) {
+    throw new Error('notebook_url must be a NotebookLM https URL without query parameters');
   }
   const notebookId = url.pathname.match(/^\/notebook\/([^/?#]+)\/?$/)?.[1];
   if (!notebookId) {

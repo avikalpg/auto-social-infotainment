@@ -23,6 +23,8 @@ test('download worker validateNotebookUrl rejects invalid schemes, hosts, paths,
     'https://evil.example/notebook/example',
     'https://user:pass@notebook.google.com/notebook/example',
     'https://notebook.google.com/notebook/example#heading',
+    'https://notebook.google.com/notebook/example?redirect=evil',
+    'https://notebook.google.com:443/notebook/example',
     'https://notebook.google.com/notebook/',
     'https://notebook.google.com/notebook',
     'https://notebook.google.com/notebook/example/extra',
@@ -64,6 +66,13 @@ test('download worker validate rejects missing or non-string or whitespace-only 
     ['allow_root', false],
     ['allow_root', ''],
   ];
+
+  for (const duration of [true, false, 0, -1, '12']) {
+    await assert.rejects(
+      () => validate({ ...baseReq, expected_duration_seconds: duration }),
+      /expected_duration_seconds must be a positive number/,
+    );
+  }
 
   for (const [key, val] of badCases) {
     const req = { ...baseReq, [key]: val };

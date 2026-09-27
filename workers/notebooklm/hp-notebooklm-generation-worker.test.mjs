@@ -49,6 +49,14 @@ test('generation request accepts only the documented contract and NotebookLM URL
       /identify a NotebookLM notebook/,
     );
     assert.throws(
+      () => validateNotebookUrl('https://notebook.google.com/notebook/example?redirect=evil'),
+      /without query parameters/,
+    );
+    assert.throws(
+      () => validateNotebookUrl('https://notebook.google.com:443/notebook/example'),
+      /without query parameters/,
+    );
+    assert.throws(
       () => validateRequest(request(root, { receipt_path: path.join(root, '..', 'escape.json') })),
       /outside configured allow_root/,
     );

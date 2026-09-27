@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -54,6 +55,90 @@ def _absolute_contained_path(value: Any, root: Path, field: str) -> Path:
     return resolved
 
 
+def _validate_notebook_url(value: str) -> None:
+    notebook_url = urlsplit(value)
+    if (
+        notebook_url.scheme != "https"
+        or notebook_url.hostname != "notebook.google.com"
+        or notebook_url.port is not None
+        or notebook_url.username is not None
+        or notebook_url.password is not None
+        or notebook_url.query
+        or notebook_url.fragment
+        or not re.fullmatch(r"/notebook/[^/]+/?", notebook_url.path)
+    ):
+        raise ValueError("notebook_url must be a NotebookLM URL without query parameters")
+
+
+def validate_notebook_generation_request(data: dict[str, Any]) -> None:
+    allowed = {
+        "schema_version",
+        "request_id",
+        "story_id",
+        "request_token",
+        "notebook_url",
+        "artifact_title",
+        "focus_prompt",
+        "receipt_path",
+        "allow_root",
+        "cdp_url",
+        "timestamp",
+    }
+    extra = set(data) - allowed
+    if extra:
+        raise ValueError(
+            f"notebook generation request has unsupported keys: {', '.join(sorted(extra))}"
+        )
+    for key in (
+        "request_id",
+        "story_id",
+        "request_token",
+        "notebook_url",
+        "artifact_title",
+        "focus_prompt",
+        "receipt_path",
+        "allow_root",
+    ):
+        value = data.get(key)
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"notebook generation request {key} must be a non-empty string")
+    _validate_notebook_url(data["notebook_url"])
+    allow_root = Path(data["allow_root"])
+    if not allow_root.is_absolute():
+        raise ValueError("allow_root must be an absolute path")
+    _absolute_contained_path(data["receipt_path"], allow_root, "receipt_path")
+
+
+def validate_notebook_generation_receipt(data: dict[str, Any]) -> None:
+    require_keys(
+        data,
+        {
+            "request_id",
+            "story_id",
+            "request_token",
+            "status",
+            "artifact_title",
+            "notebook_url",
+            "video_format",
+            "timestamp",
+            "evidence",
+        },
+        "notebook generation receipt",
+    )
+    if data["status"] != "queued":
+        raise ValueError("notebook generation receipt status must be queued")
+    if data["video_format"] != "Short":
+        raise ValueError("notebook generation receipt video_format must be Short")
+    _validate_notebook_url(str(data["notebook_url"]))
+    evidence = data["evidence"]
+    if not isinstance(evidence, dict):
+        raise TypeError("notebook generation receipt evidence must be object")
+    if evidence.get("generation_only") is not True or evidence.get("download_attempted") is not False:
+        raise ValueError("notebook generation receipt must contain generation-only evidence")
+    if evidence.get("generation_state") not in {"queued", "generating"}:
+        raise ValueError("notebook generation receipt must contain a visible queue state")
+
+
 def validate_notebook_request(data: dict[str, Any]) -> None:
     allowed = {
         "schema_version",
@@ -88,14 +173,7 @@ def validate_notebook_request(data: dict[str, Any]) -> None:
         raise ValueError(
             f"notebook download request has unsupported keys: {', '.join(sorted(extra))}"
         )
-    notebook_url = urlsplit(str(data["notebook_url"]))
-    if (
-        notebook_url.scheme != "https"
-        or notebook_url.hostname != "notebook.google.com"
-        or not notebook_url.path.startswith("/notebook/")
-        or notebook_url.path == "/notebook/"
-    ):
-        raise ValueError("notebook_url must be a NotebookLM URL")
+    _validate_notebook_url(data["notebook_url"])
     allow_root = Path(str(data["allow_root"]))
     if not allow_root.is_absolute():
         raise ValueError("allow_root must be an absolute path")
@@ -110,10 +188,12 @@ def validate_notebook_request(data: dict[str, Any]) -> None:
         not isinstance(data["expected_container"], str) or not data["expected_container"].strip()
     ):
         raise ValueError("expected_container must be a non-empty media container")
-    if "expected_duration_seconds" in data and not isinstance(
-        data["expected_duration_seconds"], (int, float)
-    ):
-        raise ValueError("expected_duration_seconds must be numeric")
+    if "expected_duration_seconds" in data:
+        duration = data["expected_duration_seconds"]
+        if isinstance(duration, bool) or not isinstance(duration, (int, float)):
+            raise ValueError("expected_duration_seconds must be numeric")
+        if duration <= 0:
+            raise ValueError("expected_duration_seconds must be positive")
 
 
 def validate_notebook_receipt(

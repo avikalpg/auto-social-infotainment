@@ -103,6 +103,7 @@ class CaptionWorkflowTests(unittest.TestCase):
                     "artifact_title": "Test Title",
                 },
             )
+            state.stages["video_queued"].status = "done"
 
             # In non-dry-run mode without caption adapter configured, fails before running worker
             with self.assertRaises(AdapterNotConfigured):
@@ -163,6 +164,7 @@ class CaptionWorkflowTests(unittest.TestCase):
                     "artifact_title": "Test Title",
                 },
             )
+            state.stages["video_queued"].status = "done"
 
             run_stage(state, "video_produced", cfg, dry_run=True)
 
@@ -172,6 +174,67 @@ class CaptionWorkflowTests(unittest.TestCase):
             self.assertIn("caption", verification["planned"])
             self.assertIn("content_package", verification["planned"])
             self.assertTrue(verification["planned"]["caption"]["generator"]["dry_run"])
+
+
+    def test_video_queued_runs_generation_worker_and_validates_receipt(self):
+        from types import SimpleNamespace
+
+        from workflow_automation.runner import run_stage
+        from workflow_automation.state import StoryState
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            request_dir = root / "requests"
+            request_dir.mkdir()
+            worker = root / "generation_worker.py"
+            worker.write_text(
+                "import json, pathlib, sys\n"
+                "req = json.loads(pathlib.Path(sys.argv[1]).read_text())\n"
+                "receipt = {\n"
+                "  'request_id': req['request_id'], 'story_id': req['story_id'],\n"
+                "  'request_token': req['request_token'], 'status': 'queued',\n"
+                "  'artifact_title': req['artifact_title'],\n"
+                "  'notebook_url': req['notebook_url'], 'video_format': 'Short',\n"
+                "  'timestamp': '2026-09-27T00:00:00Z',\n"
+                "  'evidence': {'generation_only': True, 'download_attempted': False,\n"
+                "               'generation_state': 'queued'}\n"
+                "}\n"
+                "pathlib.Path(req['receipt_path']).write_text(json.dumps(receipt))\n"
+            )
+            cfg = SimpleNamespace(
+                notebooklm_generation_worker_cmd=("python3", str(worker)),
+                notebooklm_request_dir=request_dir,
+                notebooklm_cdp_url=None,
+                max_retries=3,
+            )
+            state = StoryState(
+                "STR-012",
+                source={
+                    "notebook_url": "https://notebook.google.com/notebook/test-1",
+                    "artifact_title": "STR-012 overview",
+                    "focus_prompt": "Focus on the disputed decision.",
+                },
+            )
+
+            run_stage(state, "video_queued", cfg)
+
+            self.assertEqual(state.stages["video_queued"].status, "done")
+            receipt_path = Path(state.artifacts["generation_receipt_path"])
+            self.assertTrue(receipt_path.is_file())
+            request = json.loads((request_dir / "STR-012.generation.request.json").read_text())
+            self.assertEqual(request["focus_prompt"], "Focus on the disputed decision.")
+            self.assertIn("receipt", state.stages["video_queued"].verification)
+
+    def test_video_produced_requires_generation_queue_confirmation(self):
+        from types import SimpleNamespace
+
+        from workflow_automation.runner import run_stage
+        from workflow_automation.state import StoryState
+
+        state = StoryState("STR-013")
+        cfg = SimpleNamespace(max_retries=3)
+        with self.assertRaisesRegex(RuntimeError, "must be queued"):
+            run_stage(state, "video_produced", cfg, dry_run=True)
 
     def test_caption_contract_rejects_unexpected_payload_fields(self):
         with tempfile.TemporaryDirectory() as temporary:

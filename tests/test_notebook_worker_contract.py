@@ -164,6 +164,41 @@ class NotebookWorkerContractTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "output_path"):
                 validate_notebook_receipt(receipt)
 
+    def test_python_contract_requires_non_empty_string_types(self):
+        from workflow_automation.contracts import validate_notebook_request
+
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            base_request = {
+                "request_id": "r1",
+                "story_id": "s1",
+                "notebook_url": "https://notebook.google.com/notebook/example",
+                "artifact_title": "Short overview",
+                "allow_root": str(root),
+                "output_path": str(root / "out.mp4"),
+            }
+            # Test non-string or empty-string values for each required field
+            bad_cases = [
+                ("request_id", 123),
+                ("request_id", ""),
+                ("request_id", "   "),
+                ("story_id", {}),
+                ("story_id", ""),
+                ("notebook_url", True),
+                ("notebook_url", ""),
+                ("artifact_title", ["unexpected"]),
+                ("artifact_title", ""),
+                ("output_path", 456),
+                ("output_path", ""),
+                ("allow_root", False),
+                ("allow_root", ""),
+            ]
+            for key, bad_val in bad_cases:
+                with self.subTest(key=key, bad_val=bad_val):
+                    invalid = dict(base_request, **{key: bad_val})
+                    with self.assertRaisesRegex(ValueError, f"{key} must be a non-empty string"):
+                        validate_notebook_request(invalid)
+
     def test_receipt_containment_validation(self):
         from workflow_automation.contracts import (
             validate_notebook_receipt,

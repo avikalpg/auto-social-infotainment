@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .adapters import CommandAdapter
+from .adapters import AdapterNotConfigured, CommandAdapter
 from .captions import read_generated_caption, write_caption_request
 from .config import Config
 from .handoff import handoff_notebooklm_video
@@ -66,11 +66,25 @@ def run_stage(state: StoryState, stage: str, cfg: Config, dry_run: bool = False)
             cdp_url=cfg.notebooklm_cdp_url,
             ffprobe_bin=cfg.ffprobe_bin,
         )
+        # Validate required adapters/assets before expensive download/handoff/ffmpeg work
+        if not dry_run:
+            if not cfg.caption_generator_cmd:
+                raise AdapterNotConfigured(
+                    "downstream platform caption generator adapter command is not configured"
+                )
+            if not cfg.branded_outro_path or not cfg.branded_outro_path.is_file():
+                raise RuntimeError(
+                    "branded outro asset is required for video production; configure "
+                    "branded_outro_path to a silent, dimension-matched MP4"
+                )
+
         result = CommandAdapter(
             "HP-local NotebookLM Playwright worker", cfg.notebooklm_worker_cmd
         ).run([str(req_path)], dry_run)
         if not dry_run:
-            artifact = ingest_download_receipt(receipt_path)
+            artifact = ingest_download_receipt(
+                receipt_path, allow_root=cfg.notebooklm_output_root
+            )
             handoff_root = cfg.content_root / ".handoff" / state.story_id
             handoff = handoff_notebooklm_video(
                 receipt_path,
@@ -78,11 +92,6 @@ def run_stage(state: StoryState, stage: str, cfg: Config, dry_run: bool = False)
                 handoff_root=handoff_root,
                 ffprobe_bin=cfg.ffprobe_bin,
             )
-            if not cfg.branded_outro_path or not cfg.branded_outro_path.is_file():
-                raise RuntimeError(
-                    "branded outro asset is required for video production; configure "
-                    "branded_outro_path to a silent, dimension-matched MP4"
-                )
             final_video = handoff_root / "final-with-branded-outro.mp4"
             outro = append_branded_outro_preserve_audio(
                 Path(handoff["video_path"]),
@@ -130,6 +139,31 @@ def run_stage(state: StoryState, stage: str, cfg: Config, dry_run: bool = False)
             result["content_package"] = {
                 "path": str(package_dir),
                 "manifest_sha256": manifest["sha256"]["final_video"],
+            }
+        else:
+            # In dry-run mode, simulate and record planned downstream operations explicitly
+            # without requiring generated worker files or media assets.
+            handoff_root = cfg.content_root / ".handoff" / state.story_id
+            caption_request_path = handoff_root / "caption.request.json"
+            caption_output_path = handoff_root / "caption.md"
+            final_video = handoff_root / "final-with-branded-outro.mp4"
+            package_dir = cfg.content_root / state.story_id
+            caption_cmd_adapter = CommandAdapter(
+                "downstream platform caption generator", cfg.caption_generator_cmd
+            )
+            result["planned"] = {
+                "handoff_root": str(handoff_root),
+                "final_video": str(final_video),
+                "caption": {
+                    "request_path": str(caption_request_path),
+                    "output_path": str(caption_output_path),
+                    "generator": caption_cmd_adapter.run([str(caption_request_path)], dry_run=True)
+                    if cfg.caption_generator_cmd
+                    else {"dry_run": True, "command": None},
+                },
+                "content_package": {
+                    "path": str(package_dir),
+                },
             }
         if "audio_path" in state.artifacts and not dry_run:
             result["audio_hash"] = verify_audio_hash(

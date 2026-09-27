@@ -130,7 +130,10 @@ class VerticalSliceTests(unittest.TestCase):
             "output_path": str(root / "out" / "story-001.mp4"),
         }
         (root / "receipt.json").write_text(json.dumps(receipt))
-        self.assertEqual(ingest_download_receipt(root / "receipt.json")["sha256"], "a" * 64)
+        self.assertEqual(
+            ingest_download_receipt(root / "receipt.json", allow_root=root / "out")["sha256"],
+            "a" * 64,
+        )
 
     @unittest.skipUnless(FFMPEG and FFPROBE, "ffmpeg/ffprobe required for media integration test")
     def test_outro_replacement_preserves_canonical_pcm_and_package_ffprobes(self):

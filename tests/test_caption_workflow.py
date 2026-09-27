@@ -65,6 +65,114 @@ class CaptionWorkflowTests(unittest.TestCase):
             (root / "caption.md").write_text("\nPlatform post copy\n")
             self.assertEqual(read_generated_caption(root / "caption.md"), "Platform post copy")
 
+    def test_video_produced_validates_caption_adapter_before_expensive_work(self):
+        """Verify that video_produced stage checks caption adapter and assets before expensive work."""
+        from types import SimpleNamespace
+
+        from workflow_automation.adapters import AdapterNotConfigured
+        from workflow_automation.runner import run_stage
+        from workflow_automation.state import StoryState
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            output_root = root / "downloads"
+            output_root.mkdir()
+            req_dir = output_root / "requests"
+            req_dir.mkdir()
+            content_root = root / "content"
+            content_root.mkdir()
+
+            # Config without caption_generator_cmd
+            cfg = SimpleNamespace(
+                notebooklm_worker_cmd=("true",),
+                caption_generator_cmd=None,
+                branded_outro_path=root / "outro.mp4",
+                notebooklm_output_root=output_root,
+                notebooklm_request_dir=req_dir,
+                notebooklm_cdp_url=None,
+                content_root=content_root,
+                ffmpeg_bin="ffmpeg",
+                ffprobe_bin="ffprobe",
+                max_retries=3,
+            )
+
+            state = StoryState(
+                "STR-010",
+                source={
+                    "notebook_url": "https://notebook.google.com/notebook/test-1",
+                    "artifact_title": "Test Title",
+                },
+            )
+
+            # In non-dry-run mode without caption adapter configured, fails before running worker
+            with self.assertRaises(AdapterNotConfigured):
+                run_stage(state, "video_produced", cfg, dry_run=False)
+
+            # In non-dry-run mode without valid branded outro file, fails before running worker
+            cfg_with_adapter = SimpleNamespace(
+                notebooklm_worker_cmd=("true",),
+                caption_generator_cmd=("true",),
+                branded_outro_path=root / "nonexistent-outro.mp4",
+                notebooklm_output_root=output_root,
+                notebooklm_request_dir=req_dir,
+                notebooklm_cdp_url=None,
+                content_root=content_root,
+                ffmpeg_bin="ffmpeg",
+                ffprobe_bin="ffprobe",
+                max_retries=3,
+            )
+            with self.assertRaisesRegex(RuntimeError, "branded outro asset is required"):
+                run_stage(state, "video_produced", cfg_with_adapter, dry_run=False)
+
+    def test_video_produced_dry_run_records_planned_operations(self):
+        """Verify that dry-run video_produced stage explicitly records planned operations
+
+        without requiring worker output files or media generation.
+        """
+        from types import SimpleNamespace
+
+        from workflow_automation.runner import run_stage
+        from workflow_automation.state import StoryState
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            output_root = root / "downloads"
+            output_root.mkdir()
+            req_dir = output_root / "requests"
+            req_dir.mkdir()
+            content_root = root / "content"
+            content_root.mkdir()
+
+            cfg = SimpleNamespace(
+                notebooklm_worker_cmd=("true",),
+                caption_generator_cmd=("echo", "caption"),
+                branded_outro_path=root / "outro.mp4",
+                notebooklm_output_root=output_root,
+                notebooklm_request_dir=req_dir,
+                notebooklm_cdp_url=None,
+                content_root=content_root,
+                ffmpeg_bin="ffmpeg",
+                ffprobe_bin="ffprobe",
+                max_retries=3,
+            )
+
+            state = StoryState(
+                "STR-011",
+                source={
+                    "notebook_url": "https://notebook.google.com/notebook/test-1",
+                    "artifact_title": "Test Title",
+                },
+            )
+
+            run_stage(state, "video_produced", cfg, dry_run=True)
+
+            self.assertEqual(state.stages["video_produced"].status, "done")
+            verification = state.stages["video_produced"].verification
+            self.assertIn("planned", verification)
+            self.assertIn("caption", verification["planned"])
+            self.assertIn("content_package", verification["planned"])
+            self.assertTrue(verification["planned"]["caption"]["generator"]["dry_run"])
+
     def test_caption_contract_rejects_unexpected_payload_fields(self):
         with tempfile.TemporaryDirectory() as temporary:
             request = {

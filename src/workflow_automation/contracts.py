@@ -71,11 +71,18 @@ def validate_notebook_request(data: dict[str, Any]) -> None:
         "ffprobe_bin",
         "timestamp",
     }
-    require_keys(
-        data,
-        {"request_id", "story_id", "notebook_url", "artifact_title", "output_path", "allow_root"},
-        "notebook download request",
-    )
+    for key in (
+        "request_id",
+        "story_id",
+        "notebook_url",
+        "artifact_title",
+        "output_path",
+        "allow_root",
+    ):
+        val = data.get(key)
+        if not isinstance(val, str) or not val.strip():
+            raise ValueError(f"notebook download request {key} must be a non-empty string")
+
     extra = set(data) - allowed
     if extra:
         raise ValueError(

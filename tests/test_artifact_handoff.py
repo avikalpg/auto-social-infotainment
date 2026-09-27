@@ -166,6 +166,91 @@ class ArtifactHandoffTests(unittest.TestCase):
             )
             self.assertEqual(validate_content_package(package, FFPROBE)["story_id"], "STR-008")
 
+    def test_end_to_end_video_produced_stage_regression(self):
+        """End-to-end regression verifying that handoff, outro append, and packaging succeed
+
+        without KeyError: 'sha256' in _receipt_media_from_probe when ffprobe validates media.
+        """
+        from types import SimpleNamespace
+
+        from workflow_automation.runner import run_stage
+        from workflow_automation.state import StoryState
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            output_root = root / "downloads"
+            output_root.mkdir()
+            req_dir = output_root / "requests"
+            req_dir.mkdir()
+            content_root = root / "content"
+            content_root.mkdir()
+
+            source_video = output_root / "STR-009-notebooklm.mp4"
+            make_source_video(source_video)
+
+            outro_video = root / "outro-silent.mp4"
+            make_silent_outro(outro_video)
+
+            # Receipt created as if by the HP-local download worker
+            receipt = {
+                "schema_version": 1,
+                "request_id": "notebooklm-STR-009",
+                "story_id": "STR-009",
+                "status": "done",
+                "output_path": str(source_video),
+                "allow_root": str(output_root),
+                "timestamp": "2026-09-27T00:00:00Z",
+                "artifact": {
+                    "size_bytes": source_video.stat().st_size,
+                    "container": "mov,mp4,m4a,3gp,3g2,mj2",
+                    "duration_seconds": 0.5,
+                    "dimensions": {"width": 32, "height": 32},
+                    "codecs": {"video": "h264", "audio": "aac"},
+                    "sha256": sha256_file(source_video),
+                },
+                "evidence": {"local_worker": True},
+            }
+            receipt_path = req_dir / "STR-009.receipt.json"
+            receipt_path.write_text(json.dumps(receipt))
+
+            # Helper script simulating caption generator writing output caption
+            caption_script = root / "mock_caption_gen.py"
+            caption_script.write_text(
+                "import sys, json, pathlib\n"
+                "req = json.loads(pathlib.Path(sys.argv[1]).read_text())\n"
+                "pathlib.Path(req['output_path']).write_text('Generated caption text')\n"
+            )
+
+            cfg = SimpleNamespace(
+                notebooklm_worker_cmd=("true",),  # Simulated worker
+                caption_generator_cmd=("python3", str(caption_script)),
+                branded_outro_path=outro_video,
+                notebooklm_output_root=output_root,
+                notebooklm_request_dir=req_dir,
+                notebooklm_cdp_url=None,
+                content_root=content_root,
+                ffmpeg_bin=FFMPEG,
+                ffprobe_bin=FFPROBE,
+                max_retries=3,
+            )
+
+            state = StoryState(
+                "STR-009",
+                source={
+                    "notebook_url": "https://notebook.google.com/notebook/test-1",
+                    "artifact_title": "Test Title",
+                },
+            )
+            state.artifacts["wispr_final_script"] = "Wispr narrative script."
+
+            run_stage(state, "video_produced", cfg, dry_run=False)
+
+            self.assertEqual(state.stages["video_produced"].status, "done")
+            self.assertIn("video_path", state.artifacts)
+            self.assertTrue(Path(state.artifacts["video_path"]).is_file())
+            self.assertIn("package_dir", state.artifacts)
+            self.assertTrue((Path(state.artifacts["package_dir"]) / "manifest.json").is_file())
+
     def test_handoff_rejects_declared_media_metadata_mismatch(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

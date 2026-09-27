@@ -238,13 +238,116 @@ class NotebookWorkerContractTests(unittest.TestCase):
                 validate_notebook_receipt_containment(receipt, allow_root=allowed)
 
             # If receipt itself carries allow_root, validate_notebook_receipt enforces it
-            receipt_with_root = dict(receipt, allow_root=str(allowed))
+    def test_worker_fails_closed_on_invalid_or_tampered_existing_artifact(self):
+        """Worker fails closed without deleting file or attempting browser download on tampered/invalid file."""
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            allowed = root / "allowed"
+            allowed.mkdir()
+            output = allowed / "tampered.mp4"
+            # Write invalid/too-small non-media content
+            output.write_text("invalid media content")
+
+            proc = self.run_worker(
+                root,
+                {
+                    "request_id": "r1",
+                    "story_id": "s1",
+                    "notebook_url": "https://notebook.google.com/notebook/example",
+                    "artifact_title": "Short overview",
+                    "output_path": str(output),
+                    "receipt_path": str(allowed / "receipt.json"),
+                    "allow_root": str(allowed),
+                    "cdp_url": "http://127.0.0.1:1",  # CDP endpoint intentionally invalid/unreachable
+                },
+            )
+            # Must fail with an error from probe/ffprobe
+            self.assertNotEqual(proc.returncode, 0)
+            # The tampered file must NOT have been deleted
+            self.assertTrue(output.exists(), "Existing invalid/tampered file must not be deleted")
+            # Must NOT have attempted CDP download (which would fail with CDP/Chrome error)
+            self.assertNotIn("authenticated Chrome context not found", proc.stderr + proc.stdout)
+            self.assertFalse((allowed / "receipt.json").exists())
+
+    def test_worker_rejects_non_string_types(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            allowed = root / "allowed"
+            allowed.mkdir()
+            for key, val in [("request_id", 123), ("story_id", {}), ("artifact_title", ["test"])]:
+                proc = self.run_worker(
+                    root,
+                    {
+                        "request_id": "r1",
+                        "story_id": "s1",
+                        "notebook_url": "https://notebook.google.com/notebook/example",
+                        "artifact_title": "Short overview",
+                        "output_path": str(allowed / "out.mp4"),
+                        "allow_root": str(allowed),
+                        key: val,
+                    },
+                )
+                self.assertNotEqual(proc.returncode, 0)
+                self.assertIn("must be a non-empty string", proc.stderr + proc.stdout)
+
+    def test_ingest_worker_receipt_and_ingest_download_receipt_require_allow_root(self):
+        from workflow_automation.contracts import (
+            validate_notebook_receipt,
+            validate_notebook_receipt_containment,
+        )
+        from workflow_automation.notebook import (
+            ingest_download_receipt,
+            ingest_worker_receipt,
+        )
+
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            allowed = root / "allowed"
+            allowed.mkdir()
+            outside = root / "outside"
+            outside.mkdir()
+
+            receipt_data = {
+                "request_id": "r1",
+                "story_id": "s1",
+                "status": "done",
+                "output_path": str(outside / "out.mp4"),
+                "artifact": {
+                    "size_bytes": 100,
+                    "container": "mp4",
+                    "duration_seconds": 10,
+                    "dimensions": {"width": 1080, "height": 1920},
+                    "codecs": {"video": "h264", "audio": "aac"},
+                    "sha256": "0" * 64,
+                },
+                "evidence": {"local_worker": True},
+            }
+            receipt_path = root / "receipt.json"
+            receipt_path.write_text(json.dumps(receipt_data))
+
+            # Without allow_root argument, calls fail (TypeError: missing required argument)
+            with self.assertRaises(TypeError):
+                ingest_download_receipt(receipt_path)  # type: ignore[call-arg]
+            with self.assertRaises(TypeError):
+                ingest_worker_receipt(receipt_path)  # type: ignore[call-arg]
+
+            # When allow_root does not contain output_path, validation fails
             with self.assertRaisesRegex(ValueError, "within allow_root"):
-                validate_notebook_receipt(receipt_with_root)
+                ingest_download_receipt(receipt_path, allow_root=allowed)
+            with self.assertRaisesRegex(ValueError, "within allow_root"):
+                ingest_worker_receipt(receipt_path, allow_root=allowed)
+
+            # Contained output_path succeeds
+            receipt_data["output_path"] = str(allowed / "out.mp4")
+            receipt_path.write_text(json.dumps(receipt_data))
+            art = ingest_download_receipt(receipt_path, allow_root=allowed)
+            self.assertEqual(art["request_id"], "r1")
+            art2 = ingest_worker_receipt(receipt_path, allow_root=allowed)
+            self.assertEqual(art2["request_id"], "r1")
 
             # Valid contained path passes
-            contained_receipt = dict(receipt, output_path=str(allowed / "out.mp4"), allow_root=str(allowed))
-            validate_notebook_receipt(contained_receipt)
+            contained_receipt = dict(receipt_data, output_path=str(allowed / "out.mp4"), allow_root=str(allowed))
+            validate_notebook_receipt(contained_receipt, allow_root=allowed)
             resolved = validate_notebook_receipt_containment(contained_receipt, allowed)
             self.assertEqual(resolved, (allowed / "out.mp4").resolve())
 

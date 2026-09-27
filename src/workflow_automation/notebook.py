@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import Any
 
 from .contracts import (
-    validate_notebook_receipt,
     validate_notebook_receipt_containment,
     validate_notebook_request,
 )
@@ -58,13 +57,10 @@ def write_download_request(
 
 
 def ingest_download_receipt(
-    path: Path, *, allow_root: Path | None = None
+    path: Path, *, allow_root: Path | str
 ) -> dict[str, Any]:
     data = json.loads(path.read_text())
-    if allow_root is not None:
-        validate_notebook_receipt_containment(data, allow_root)
-    else:
-        validate_notebook_receipt(data)
+    validate_notebook_receipt_containment(data, allow_root)
     artifact = dict(data["artifact"])
     artifact["output_path"] = data.get("output_path")
     if "allow_root" in data:
@@ -89,5 +85,5 @@ def write_worker_request(path: Path, story: dict[str, Any], output_dir: Path) ->
     )
 
 
-def ingest_worker_receipt(path: Path) -> dict[str, Any]:
-    return ingest_download_receipt(path)
+def ingest_worker_receipt(path: Path, *, allow_root: Path | str) -> dict[str, Any]:
+    return ingest_download_receipt(path, allow_root=allow_root)

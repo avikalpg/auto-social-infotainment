@@ -22,6 +22,7 @@ const REQUIRED_KEYS = [
 const ALLOWED_KEYS = new Set([
   'schema_version',
   ...REQUIRED_KEYS,
+  'request_token',
   'cdp_url',
   'timestamp',
 ]);
@@ -96,6 +97,9 @@ export function validateRequest(raw) {
   if (raw.schema_version !== undefined && raw.schema_version !== 1) {
     throw new Error('schema_version must be 1');
   }
+  if (raw.request_token !== undefined && (typeof raw.request_token !== 'string' || !raw.request_token.trim())) {
+    throw new Error('request_token must be a non-empty string');
+  }
   if (raw.timestamp !== undefined && (typeof raw.timestamp !== 'string' || !raw.timestamp.trim())) {
     throw new Error('timestamp must be a non-empty string');
   }
@@ -117,10 +121,13 @@ export function validateRequest(raw) {
     throw new Error('receipt_path is outside configured allow_root');
   }
 
+  const requestToken = raw.request_token ? raw.request_token.trim() : raw.story_id.trim();
+
   return {
     schema_version: 1,
     request_id: raw.request_id.trim(),
     story_id: raw.story_id.trim(),
+    request_token: requestToken,
     notebook_url: validateNotebookUrl(raw.notebook_url.trim()),
     artifact_title: raw.artifact_title.trim(),
     focus_prompt: raw.focus_prompt.trim(),
@@ -162,11 +169,25 @@ function normalizeText(value) {
   return String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
+export function formatPromptWithToken(prompt, token) {
+  const trimmedPrompt = String(prompt || '').trim();
+  const trimmedToken = String(token || '').trim();
+  const marker = `[ref:${trimmedToken}]`;
+  if (trimmedPrompt.includes(marker)) {
+    return trimmedPrompt;
+  }
+  return `${trimmedPrompt}\n\n${marker}`.trim();
+}
+
 export function matchingQueueState(visibleText, request) {
   const text = normalizeText(visibleText);
   const title = normalizeText(request.artifact_title);
-  const prompt = normalizeText(request.focus_prompt);
-  const hasRequestIdentity = text.includes(title) || (prompt.length >= 24 && text.includes(prompt.slice(0, 24)));
+  const token = normalizeText(request.request_token || request.story_id);
+  if (!token || !title) return null;
+
+  // Strong request identity: requires both the artifact title and the unique request/story token
+  // to be visibly present in the queue state text.
+  const hasRequestIdentity = text.includes(title) && text.includes(token);
   if (!hasRequestIdentity) return null;
   if (/\b(generating|creating|preparing|in progress)\b/.test(text)) return 'generating';
   if (/\b(queued|queueing|waiting in queue|pending)\b/.test(text)) return 'queued';
@@ -285,6 +306,7 @@ export function buildReceipt(request, status, evidence, error) {
     schema_version: 1,
     request_id: request.request_id,
     story_id: request.story_id,
+    request_token: request.request_token,
     status,
     artifact_title: request.artifact_title,
     notebook_url: request.notebook_url,
@@ -340,7 +362,8 @@ async function main() {
       await openVideoOverview(page);
       await openCustomization(page);
       await chooseShortFormat(page);
-      await fillFocusPrompt(page, request.focus_prompt);
+      const promptToSubmit = formatPromptWithToken(request.focus_prompt, request.request_token);
+      await fillFocusPrompt(page, promptToSubmit);
       await clickGenerate(page);
       const confirmation = await waitForQueuedOrGenerating(page, request);
       const receipt = buildReceipt(request, 'queued', {

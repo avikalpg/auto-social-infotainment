@@ -8,6 +8,7 @@ import test from 'node:test';
 
 import {
   buildReceipt,
+  formatPromptWithToken,
   matchingQueueState,
   validateNotebookUrl,
   validateRequest,
@@ -56,14 +57,46 @@ test('generation request accepts only the documented contract and NotebookLM URL
   }
 });
 
-test('matching queue detection requires request identity before declaring a duplicate', () => {
+test('formatPromptWithToken embeds request token into prompt', () => {
+  const prompt = 'Tell the story of the disputed decision in under one minute.';
+  const token = 'STR-001';
+  const formatted = formatPromptWithToken(prompt, token);
+  assert.equal(formatted, `${prompt}\n\n[ref:STR-001]`);
+  // Calling formatPromptWithToken again on already-formatted prompt is idempotent
+  assert.equal(formatPromptWithToken(formatted, token), formatted);
+});
+
+test('matching queue detection requires both artifact title and unique request token', () => {
   const req = {
-    artifact_title: 'STR-001 short overview',
+    artifact_title: 'Disputed Decision',
+    story_id: 'STR-001',
+    request_token: 'STR-001',
     focus_prompt: 'Tell the story of the disputed decision in under one minute.',
   };
-  assert.equal(matchingQueueState('Video overview STR-001 short overview is generating.', req), 'generating');
-  assert.equal(matchingQueueState('STR-001 short overview is queued.', req), 'queued');
-  assert.equal(matchingQueueState('Another video is generating.', req), null);
+  // Matches when both title and request token are present
+  assert.equal(
+    matchingQueueState('Video overview Disputed Decision (ref: STR-001) is generating.', req),
+    'generating'
+  );
+  assert.equal(
+    matchingQueueState('Disputed Decision [ref:str-001] is queued.', req),
+    'queued'
+  );
+  // Rejects when only artifact title matches but request token is missing (e.g. another story with same title)
+  assert.equal(
+    matchingQueueState('Video overview Disputed Decision is generating.', req),
+    null
+  );
+  // Rejects when only request token matches but artifact title is missing
+  assert.equal(
+    matchingQueueState('STR-001 is queued.', req),
+    null
+  );
+  // Rejects unrelated generations
+  assert.equal(
+    matchingQueueState('Another video is generating.', req),
+    null
+  );
 });
 
 test('receipt is atomically written with generation-only queue evidence', async () => {

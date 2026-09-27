@@ -41,7 +41,10 @@ export function validateNotebookUrl(value) {
  return url.toString();
 }
 export async function validate(req){
- for(const k of REQUIRED)if(!req[k])fail(`missing required request key: ${k}`);const extra=Object.keys(req).filter(k=>!ALLOWED.has(k));if(extra.length)fail(`unsupported request keys: ${extra.sort().join(', ')}`);
+ for(const k of REQUIRED){
+   if(typeof req[k]!=='string'||!req[k].trim())fail(`${k} must be a non-empty string`);
+ }
+ const extra=Object.keys(req).filter(k=>!ALLOWED.has(k));if(extra.length)fail(`unsupported request keys: ${extra.sort().join(', ')}`);
  validateNotebookUrl(req.notebook_url);
  req.output_path=await safePath(req.output_path,req.allow_root,'output_path');
  req.receipt_path=await safePath(req.receipt_path||path.join(req.allow_root,`${req.request_id}.receipt.json`),req.allow_root,'receipt_path');
@@ -54,7 +57,30 @@ function verifyExpected(a,req){
 }
 async function main(){
  const requestFile=process.argv[2]; if(!requestFile)fail('usage: hp-local-download-worker.mjs REQUEST.json'); const req=JSON.parse(await fs.readFile(requestFile,'utf8')); await validate(req); const receipt=req.receipt_path;
- try { const a=await probe(req.output_path,req.ffprobe_bin); verifyExpected(a,req); const r={schema_version:1,request_id:req.request_id,story_id:req.story_id,status:'done',output_path:req.output_path,allow_root:req.allow_root,timestamp:new Date().toISOString(),artifact:a,evidence:{idempotent_existing:true,artifact_title:req.artifact_title,local_worker:true}};await atomicJson(receipt,r);console.log(JSON.stringify(r));return; } catch(e) { if(e?.code!=='ENOENT'&&!String(e.message).includes('No such file')) { try{await fs.unlink(req.output_path);}catch{} } }
+ let existingStat = null;
+ try {
+   existingStat = await fs.stat(req.output_path);
+ } catch(e) {
+   if (e?.code !== 'ENOENT') throw e;
+ }
+ if (existingStat) {
+   const a = await probe(req.output_path, req.ffprobe_bin);
+   verifyExpected(a, req);
+   const r = {
+     schema_version: 1,
+     request_id: req.request_id,
+     story_id: req.story_id,
+     status: 'done',
+     output_path: req.output_path,
+     allow_root: req.allow_root,
+     timestamp: new Date().toISOString(),
+     artifact: a,
+     evidence: { idempotent_existing: true, artifact_title: req.artifact_title, local_worker: true }
+   };
+   await atomicJson(receipt, r);
+   console.log(JSON.stringify(r));
+   return;
+ }
  const { chromium }=await import('playwright-core'); const browser=await chromium.connectOverCDP(req.cdp_url||'http://127.0.0.1:9222');
  let lastError; try { const context=browser.contexts()[0]; if(!context)fail('authenticated Chrome context not found'); let page=context.pages().find(p=>p.url()===req.notebook_url||p.url().includes(new URL(req.notebook_url).pathname)); if(!page)page=await context.newPage();
   for(let attempt=1;attempt<=2;attempt++){try{await page.goto(req.notebook_url,{waitUntil:'domcontentloaded',timeout:60000});const artifact=page.getByRole('button',{name:req.artifact_title,exact:false}).first();await artifact.waitFor({state:'visible',timeout:60000});await artifact.click();const dl=page.getByRole('button',{name:/^Download$/i}).first();await dl.waitFor({state:'visible',timeout:30000});const [download]=await Promise.all([page.waitForEvent('download',{timeout:120000}),dl.click()]);await download.saveAs(req.output_path);const failure=await download.failure();if(failure)fail(`download failed: ${failure}`);const a=await probe(req.output_path,req.ffprobe_bin);verifyExpected(a,req);const r={schema_version:1,request_id:req.request_id,story_id:req.story_id,status:'done',output_path:req.output_path,allow_root:req.allow_root,timestamp:new Date().toISOString(),artifact:a,evidence:{idempotent_existing:false,artifact_title:req.artifact_title,suggested_filename:download.suggestedFilename(),selector_attempts:attempt,download_failure:null,local_worker:true}};await atomicJson(receipt,r);console.log(JSON.stringify(r));return;}catch(e){lastError=e;if(attempt===1)await page.reload({waitUntil:'domcontentloaded',timeout:60000}).catch(()=>{});}}

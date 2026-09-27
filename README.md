@@ -18,9 +18,9 @@ NotebookLM rule: production video generation must run through an HP-local Playwr
 
 ### HP NotebookLM generation worker
 
-`workers/notebooklm/hp-notebooklm-generation-worker.mjs` is generation-only and is separate from the download worker. It connects to the authenticated HP Chrome CDP endpoint, reuses or navigates to the supplied notebook, configures a **Short** Video Overview with the supplied `focus_prompt`, and writes an atomic receipt only after NotebookLM visibly reports the request as queued or generating. It does not wait for completion or download anything.
+`workers/notebooklm/hp-notebooklm-generation-worker.mjs` is generation-only and is separate from the download worker. It connects to the authenticated HP Chrome CDP endpoint, reuses or navigates to the supplied notebook, configures a **Short** Video Overview with the supplied `focus_prompt`, and writes an atomic receipt only after NotebookLM visibly reports the request as queued or generating. It embeds a unique request/story token (`request_token` or `story_id`) into the prompt submitted to NotebookLM and requires both the artifact title and the unique request token to be visibly present before matching an existing queued item. It does not wait for completion or download anything.
 
-Its request is strict JSON: `request_id`, `story_id`, `notebook_url` (an `https://notebook.google.com/notebook/...` URL), `artifact_title`, `focus_prompt`, absolute `allow_root`, and an absolute `receipt_path` contained by `allow_root`; optional keys are `schema_version: 1`, `cdp_url`, and `timestamp`. The receipt has `status: "queued"` (or `"error"`), fixed `video_format: "Short"`, and evidence including `already_queued`, the visible generation state, and `download_attempted: false`.
+Its request is strict JSON: `request_id`, `story_id`, `notebook_url` (an `https://notebook.google.com/notebook/...` URL), `artifact_title`, `focus_prompt`, absolute `allow_root`, and an absolute `receipt_path` contained by `allow_root`; optional keys are `schema_version: 1`, `request_token`, `cdp_url`, and `timestamp`. The receipt has `status: "queued"` (or `"error"`), fixed `video_format: "Short"`, and evidence including `already_queued`, the visible generation state, and `download_attempted: false`.
 
 ```bash
 node workers/notebooklm/hp-notebooklm-generation-worker.mjs request.json

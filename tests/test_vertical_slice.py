@@ -127,7 +127,7 @@ class VerticalSliceTests(unittest.TestCase):
                 "codecs": {"video": "h264", "audio": None},
                 "sha256": "a" * 64,
             },
-            "evidence": {"existing_verified": True},
+            "evidence": {"local_worker": True},
             "output_path": str(root / "out" / "story-001.mp4"),
         }
         (root / "receipt.json").write_text(json.dumps(receipt))
@@ -183,8 +183,9 @@ class VerticalSliceTests(unittest.TestCase):
             "https://example.com\\malicious",
             "https://example.com\nmalicious",
         ):
-            with self.subTest(public_url=public_url), self.assertRaisesRegex(
-                ValueError, "public_url"
+            with (
+                self.subTest(public_url=public_url),
+                self.assertRaisesRegex(ValueError, "public_url"),
             ):
                 validate_publication_receipt(dict(base, public_url=public_url))
 

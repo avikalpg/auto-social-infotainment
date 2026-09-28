@@ -15,7 +15,16 @@ FFPROBE = shutil.which("ffprobe")
 
 def probe_artifact(path: Path) -> dict[str, object]:
     raw = subprocess.run(
-        [FFPROBE, "-v", "error", "-print_format", "json", "-show_format", "-show_streams", str(path)],
+        [
+            FFPROBE,
+            "-v",
+            "error",
+            "-print_format",
+            "json",
+            "-show_format",
+            "-show_streams",
+            str(path),
+        ],
         text=True,
         capture_output=True,
         check=True,
@@ -122,7 +131,9 @@ class NotebookWorkerContractTests(unittest.TestCase):
             self.assertNotEqual(proc.returncode, 0)
             self.assertFalse(outside_parent.exists())
 
-    @unittest.skipUnless(FFMPEG and FFPROBE, "ffmpeg/ffprobe required for download-worker integration test")
+    @unittest.skipUnless(
+        FFMPEG and FFPROBE, "ffmpeg/ffprobe required for download-worker integration test"
+    )
     def test_short_overview_format_is_not_compared_to_mp4_container(self):
         """Existing artifact path deterministically exercises the worker's post-download handoff."""
         with tempfile.TemporaryDirectory() as d:
@@ -215,7 +226,7 @@ class NotebookWorkerContractTests(unittest.TestCase):
                     "codecs": {"video": "h264", "audio": None},
                     "sha256": "a" * 64,
                 },
-                "evidence": {"checked": True},
+                "evidence": {"local_worker": True},
             }
             with self.assertRaisesRegex(ValueError, "output_path"):
                 validate_notebook_receipt(receipt, allow_root=root)
@@ -260,9 +271,7 @@ class NotebookWorkerContractTests(unittest.TestCase):
                 with self.subTest(key=key):
                     artifact = dict(receipt["artifact"], **{key: value})
                     with self.assertRaisesRegex(ValueError, key):
-                        validate_notebook_receipt(
-                            dict(receipt, artifact=artifact), allow_root=root
-                        )
+                        validate_notebook_receipt(dict(receipt, artifact=artifact), allow_root=root)
 
     def test_python_contract_requires_non_empty_string_types(self):
         from workflow_automation.contracts import validate_notebook_request
@@ -336,7 +345,7 @@ class NotebookWorkerContractTests(unittest.TestCase):
                     "codecs": {"video": "h264", "audio": None},
                     "sha256": "a" * 64,
                 },
-                "evidence": {"checked": True},
+                "evidence": {"local_worker": True},
             }
             # The canonical validator cannot be called without a trusted containment root.
             with self.assertRaises(TypeError):
@@ -458,7 +467,9 @@ class NotebookWorkerContractTests(unittest.TestCase):
             self.assertEqual(art2["request_id"], "r1")
 
             # Valid contained path passes
-            contained_receipt = dict(receipt_data, output_path=str(allowed / "out.mp4"), allow_root=str(allowed))
+            contained_receipt = dict(
+                receipt_data, output_path=str(allowed / "out.mp4"), allow_root=str(allowed)
+            )
             validate_notebook_receipt(contained_receipt, allow_root=allowed)
             resolved = validate_notebook_receipt_containment(contained_receipt, allowed)
             self.assertEqual(resolved, (allowed / "out.mp4").resolve())
@@ -540,7 +551,7 @@ class NotebookWorkerContractTests(unittest.TestCase):
                     "codecs": {"video": "h264", "audio": None},
                     "sha256": "a" * 64,
                 },
-                "evidence": {"checked": True},
+                "evidence": {"local_worker": True},
             }
             with self.assertRaisesRegex(ValueError, "schema_version must be 1"):
                 validate_notebook_receipt(receipt, allow_root=root)
@@ -563,6 +574,111 @@ class NotebookWorkerContractTests(unittest.TestCase):
             }
             with self.assertRaisesRegex(ValueError, "schema_version must be 1"):
                 validate_notebook_generation_receipt(gen_receipt)
+
+    def test_generation_error_receipt_is_valid_but_cannot_advance_workflow(self):
+        from workflow_automation.contracts import validate_notebook_generation_receipt
+        from workflow_automation.notebook import ingest_generation_receipt
+
+        receipt = {
+            "schema_version": 1,
+            "request_id": "r1",
+            "story_id": "s1",
+            "request_token": "tok",
+            "status": "error",
+            "artifact_title": "Short overview",
+            "notebook_url": "https://notebook.google.com/notebook/example",
+            "video_format": "Short",
+            "timestamp": "2026-09-28T20:00:00Z",
+            "evidence": {
+                "generation_only": True,
+                "download_attempted": False,
+            },
+            "error": {"message": "queue button unavailable"},
+        }
+        validate_notebook_generation_receipt(receipt)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            receipt_path = Path(temporary) / "generation.receipt.json"
+            receipt_path.write_text(json.dumps(receipt))
+            with self.assertRaisesRegex(RuntimeError, "queue button unavailable"):
+                ingest_generation_receipt(
+                    receipt_path,
+                    request_id="r1",
+                    story_id="s1",
+                    request_token="tok",
+                )
+
+    def test_receipt_contracts_reject_unsupported_fields(self):
+        from workflow_automation.contracts import (
+            validate_notebook_generation_receipt,
+            validate_notebook_receipt,
+        )
+
+        generation_receipt = {
+            "schema_version": 1,
+            "request_id": "r1",
+            "story_id": "s1",
+            "request_token": "tok",
+            "status": "queued",
+            "artifact_title": "Short overview",
+            "notebook_url": "https://notebook.google.com/notebook/example",
+            "video_format": "Short",
+            "timestamp": "2026-09-28T20:00:00Z",
+            "evidence": {
+                "generation_only": True,
+                "download_attempted": False,
+                "generation_state": "queued",
+            },
+        }
+        for mutation in (
+            {**generation_receipt, "trusted": True},
+            {
+                **generation_receipt,
+                "evidence": {**generation_receipt["evidence"], "trusted": True},
+            },
+        ):
+            with (
+                self.subTest(receipt="generation"),
+                self.assertRaisesRegex(ValueError, "unsupported keys"),
+            ):
+                validate_notebook_generation_receipt(mutation)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            download_receipt = {
+                "schema_version": 1,
+                "request_id": "r1",
+                "story_id": "s1",
+                "status": "done",
+                "timestamp": "2026-09-28T20:00:00Z",
+                "output_path": str(root / "out.mp4"),
+                "artifact": {
+                    "size_bytes": 1,
+                    "container": "mp4",
+                    "duration_seconds": 1,
+                    "dimensions": {"width": 1, "height": 1},
+                    "codecs": {"video": "h264", "audio": None},
+                    "sha256": "a" * 64,
+                },
+                "evidence": {"local_worker": True},
+            }
+            mutations = (
+                {**download_receipt, "trusted": True},
+                {
+                    **download_receipt,
+                    "artifact": {**download_receipt["artifact"], "trusted": True},
+                },
+                {
+                    **download_receipt,
+                    "evidence": {**download_receipt["evidence"], "trusted": True},
+                },
+            )
+            for mutation in mutations:
+                with (
+                    self.subTest(receipt="download"),
+                    self.assertRaisesRegex(ValueError, "unsupported keys"),
+                ):
+                    validate_notebook_receipt(mutation, allow_root=root)
 
     def test_generation_request_optional_fields_validation(self):
         from workflow_automation.contracts import validate_notebook_generation_request

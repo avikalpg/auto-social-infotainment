@@ -57,6 +57,8 @@ def ingest_generation_receipt(
         raise FileNotFoundError(f"notebook generation receipt not found: {path}")
     receipt = json.loads(path.read_text())
     validate_notebook_generation_receipt(receipt)
+    if receipt["status"] == "error":
+        raise RuntimeError("NotebookLM generation worker failed: " + receipt["error"]["message"])
     expected = {
         "request_id": request_id,
         "story_id": story_id,

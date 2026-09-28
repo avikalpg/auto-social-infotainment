@@ -129,7 +129,7 @@ class ArtifactHandoffTests(unittest.TestCase):
                     "codecs": {"video": "h264", "audio": "aac"},
                     "sha256": sha256_file(source),
                 },
-                "evidence": {"visible_download": True},
+                "evidence": {"local_worker": True},
                 "output_path": str(source),
             }
             receipt_path = root / "receipt.json"
@@ -198,7 +198,7 @@ class ArtifactHandoffTests(unittest.TestCase):
                     "codecs": {"video": "h264", "audio": "aac"},
                     "sha256": sha256_file(source),
                 },
-                "evidence": {"visible_download": True},
+                "evidence": {"local_worker": True},
                 "output_path": str(source),
             }
             receipt_path = root / "receipt.json"
@@ -361,7 +361,7 @@ class ArtifactHandoffTests(unittest.TestCase):
                     "codecs": {"video": "h264", "audio": "aac"},
                     "sha256": sha256_file(source),
                 },
-                "evidence": {"visible_download": True},
+                "evidence": {"local_worker": True},
                 "output_path": str(source),
             }
             receipt_path = root / "receipt.json"
@@ -395,7 +395,7 @@ class ArtifactHandoffTests(unittest.TestCase):
                     "codecs": {"video": "h264", "audio": "aac"},
                     "sha256": "0" * 64,
                 },
-                "evidence": {"visible_download": True},
+                "evidence": {"local_worker": True},
                 "output_path": str(source),
             }
             receipt_path = root / "receipt.json"

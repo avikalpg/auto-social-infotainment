@@ -19,6 +19,12 @@ def require_keys(obj: dict[str, Any], keys: set[str], label: str) -> None:
         raise ValueError(f"{label} missing required keys: {', '.join(missing)}")
 
 
+def reject_unsupported_keys(obj: dict[str, Any], allowed: set[str], label: str) -> None:
+    extra = sorted(set(obj) - allowed)
+    if extra:
+        raise ValueError(f"{label} has unsupported keys: {', '.join(extra)}")
+
+
 def validate_candidate_story(story: dict[str, Any], source_id: str) -> dict[str, Any]:
     if not isinstance(story, dict):
         raise TypeError("candidate story must be object")
@@ -142,7 +148,23 @@ def validate_notebook_generation_request(data: dict[str, Any]) -> None:
 
 
 def validate_notebook_generation_receipt(data: dict[str, Any]) -> None:
-    if "schema_version" in data and data["schema_version"] != 1:
+    allowed = {
+        "schema_version",
+        "request_id",
+        "story_id",
+        "request_token",
+        "status",
+        "artifact_title",
+        "notebook_url",
+        "video_format",
+        "timestamp",
+        "evidence",
+        "error",
+    }
+    reject_unsupported_keys(data, allowed, "notebook generation receipt")
+    if "schema_version" in data and (
+        isinstance(data["schema_version"], bool) or data["schema_version"] != 1
+    ):
         raise ValueError("notebook generation receipt schema_version must be 1")
     require_keys(
         data,
@@ -159,18 +181,57 @@ def validate_notebook_generation_receipt(data: dict[str, Any]) -> None:
         },
         "notebook generation receipt",
     )
-    if data["status"] != "queued":
-        raise ValueError("notebook generation receipt status must be queued")
+    for key in (
+        "request_id",
+        "story_id",
+        "request_token",
+        "artifact_title",
+        "notebook_url",
+        "video_format",
+        "timestamp",
+    ):
+        if not isinstance(data[key], str) or not data[key].strip():
+            raise ValueError(f"notebook generation receipt {key} must be a non-empty string")
+    if data["status"] not in {"queued", "error"}:
+        raise ValueError("notebook generation receipt status must be queued or error")
     if data["video_format"] != "Short":
         raise ValueError("notebook generation receipt video_format must be Short")
-    _validate_notebook_url(str(data["notebook_url"]))
+    _validate_notebook_url(data["notebook_url"])
     evidence = data["evidence"]
     if not isinstance(evidence, dict):
         raise TypeError("notebook generation receipt evidence must be object")
-    if evidence.get("generation_only") is not True or evidence.get("download_attempted") is not False:
+    reject_unsupported_keys(
+        evidence,
+        {
+            "request_path",
+            "allow_root",
+            "cdp_url",
+            "generation_only",
+            "download_attempted",
+            "page_reused",
+            "already_queued",
+            "generation_state",
+            "confirmation",
+        },
+        "notebook generation receipt evidence",
+    )
+    if (
+        evidence.get("generation_only") is not True
+        or evidence.get("download_attempted") is not False
+    ):
         raise ValueError("notebook generation receipt must contain generation-only evidence")
-    if evidence.get("generation_state") not in {"queued", "generating"}:
-        raise ValueError("notebook generation receipt must contain a visible queue state")
+    if data["status"] == "queued":
+        if "error" in data:
+            raise ValueError("queued notebook generation receipt must not contain error details")
+        if evidence.get("generation_state") not in {"queued", "generating"}:
+            raise ValueError("notebook generation receipt must contain a visible queue state")
+    else:
+        error = data.get("error")
+        if not isinstance(error, dict):
+            raise ValueError("error generation receipt must include error details")
+        reject_unsupported_keys(error, {"message"}, "notebook generation receipt error")
+        if not isinstance(error.get("message"), str) or not error["message"].strip():
+            raise ValueError("error generation receipt must include a non-empty message")
 
 
 def validate_notebook_request(data: dict[str, Any]) -> None:
@@ -252,7 +313,27 @@ def validate_notebook_receipt(data: dict[str, Any], *, allow_root: Path | str) -
     A root declared by the receipt is metadata only and can never define its own security
     boundary.
     """
-    if "schema_version" in data and data["schema_version"] != 1:
+    reject_unsupported_keys(
+        data,
+        {
+            "schema_version",
+            "request_id",
+            "story_id",
+            "request_token",
+            "status",
+            "notebook_url",
+            "video_format",
+            "output_path",
+            "allow_root",
+            "timestamp",
+            "artifact",
+            "evidence",
+        },
+        "notebook download receipt",
+    )
+    if "schema_version" in data and (
+        isinstance(data["schema_version"], bool) or data["schema_version"] != 1
+    ):
         raise ValueError("notebook download receipt schema_version must be 1")
     require_keys(
         data,
@@ -294,6 +375,11 @@ def validate_notebook_receipt(data: dict[str, Any], *, allow_root: Path | str) -
     artifact = data["artifact"]
     if not isinstance(artifact, dict):
         raise TypeError("notebook download receipt artifact must be object")
+    reject_unsupported_keys(
+        artifact,
+        {"size_bytes", "container", "duration_seconds", "dimensions", "codecs", "sha256"},
+        "notebook artifact",
+    )
     require_keys(
         artifact,
         {"size_bytes", "container", "duration_seconds", "dimensions", "codecs", "sha256"},
@@ -312,11 +398,15 @@ def validate_notebook_receipt(data: dict[str, Any], *, allow_root: Path | str) -
     ):
         raise ValueError("notebook artifact duration_seconds must be positive")
     dimensions = artifact["dimensions"]
+    if isinstance(dimensions, dict):
+        reject_unsupported_keys(dimensions, {"width", "height"}, "notebook artifact dimensions")
     if not isinstance(dimensions, dict) or not all(
         isinstance(dimensions.get(k), int) and dimensions[k] > 0 for k in ("width", "height")
     ):
         raise ValueError("notebook artifact dimensions must contain positive width and height")
     codecs = artifact["codecs"]
+    if isinstance(codecs, dict):
+        reject_unsupported_keys(codecs, {"video", "audio"}, "notebook artifact codecs")
     if (
         not isinstance(codecs, dict)
         or not isinstance(codecs.get("video"), str)
@@ -334,13 +424,24 @@ def validate_notebook_receipt(data: dict[str, Any], *, allow_root: Path | str) -
         or any(c not in "0123456789abcdef" for c in sha.lower())
     ):
         raise ValueError("notebook artifact sha256 must be a SHA-256 hex digest")
-    if not isinstance(data["evidence"], dict):
+    evidence = data["evidence"]
+    if not isinstance(evidence, dict):
         raise TypeError("notebook download receipt evidence must be object")
+    reject_unsupported_keys(
+        evidence,
+        {
+            "idempotent_existing",
+            "artifact_title",
+            "suggested_filename",
+            "selector_attempts",
+            "download_failure",
+            "local_worker",
+        },
+        "notebook download receipt evidence",
+    )
 
 
-def validate_notebook_receipt_containment(
-    data: dict[str, Any], allow_root: Path | str
-) -> Path:
+def validate_notebook_receipt_containment(data: dict[str, Any], allow_root: Path | str) -> Path:
     """Dedicated validator strictly enforcing receipt output_path containment within allow_root."""
     validate_notebook_receipt(data, allow_root=allow_root)
     return _absolute_contained_path(data["output_path"], Path(str(allow_root)), "output_path")

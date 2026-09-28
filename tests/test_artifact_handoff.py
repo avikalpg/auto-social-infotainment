@@ -139,6 +139,7 @@ class ArtifactHandoffTests(unittest.TestCase):
                 receipt_path,
                 allowed_output_root=output_root,
                 handoff_root=root / "handoff" / "STR-008",
+                allowed_handoff_root=root,
                 ffprobe_bin=FFPROBE,
             )
             handed_off = Path(handoff["video_path"])
@@ -176,6 +177,58 @@ class ArtifactHandoffTests(unittest.TestCase):
                 root / "packages", "STR-008", final, "Caption", FFPROBE
             )
             self.assertEqual(validate_content_package(package, FFPROBE)["story_id"], "STR-008")
+
+    def test_handoff_rejects_destination_outside_trusted_root(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            output_root = root / "worker-output"
+            output_root.mkdir()
+            source = output_root / "video.mp4"
+            make_source_video(source)
+            receipt = {
+                "request_id": "notebooklm-STR-008",
+                "story_id": "STR-008",
+                "status": "done",
+                "timestamp": "2026-09-27T00:00:00Z",
+                "artifact": {
+                    "size_bytes": source.stat().st_size,
+                    "container": "mov,mp4,m4a,3gp,3g2,mj2",
+                    "duration_seconds": 0.5,
+                    "dimensions": {"width": 32, "height": 32},
+                    "codecs": {"video": "h264", "audio": "aac"},
+                    "sha256": sha256_file(source),
+                },
+                "evidence": {"visible_download": True},
+                "output_path": str(source),
+            }
+            receipt_path = root / "receipt.json"
+            receipt_path.write_text(json.dumps(receipt))
+            allowed_handoff_root = root / "content"
+            allowed_handoff_root.mkdir()
+
+            with self.assertRaisesRegex(ValueError, "handoff root escapes"):
+                handoff_notebooklm_video(
+                    receipt_path,
+                    allowed_output_root=output_root,
+                    handoff_root=root / "outside" / "handoff",
+                    allowed_handoff_root=allowed_handoff_root,
+                    ffprobe_bin=FFPROBE,
+                )
+
+            handoff_root = allowed_handoff_root / "STR-008"
+            handoff_root.mkdir()
+            outside_target = root / "outside-target.mp4"
+            outside_target.write_bytes(b"do not replace")
+            (handoff_root / "notebooklm-original.mp4").symlink_to(outside_target)
+            with self.assertRaisesRegex(ValueError, "not a regular file"):
+                handoff_notebooklm_video(
+                    receipt_path,
+                    allowed_output_root=output_root,
+                    handoff_root=handoff_root,
+                    allowed_handoff_root=allowed_handoff_root,
+                    ffprobe_bin=FFPROBE,
+                )
+            self.assertEqual(outside_target.read_bytes(), b"do not replace")
 
     def test_end_to_end_video_produced_stage_regression(self):
         """End-to-end regression verifying that handoff, outro append, and packaging succeed
@@ -318,6 +371,7 @@ class ArtifactHandoffTests(unittest.TestCase):
                     receipt_path,
                     allowed_output_root=output_root,
                     handoff_root=root / "handoff",
+                    allowed_handoff_root=root,
                     ffprobe_bin=FFPROBE,
                 )
 
@@ -351,6 +405,7 @@ class ArtifactHandoffTests(unittest.TestCase):
                     receipt_path,
                     allowed_output_root=output_root,
                     handoff_root=root / "handoff",
+                    allowed_handoff_root=root,
                     ffprobe_bin=FFPROBE,
                 )
 

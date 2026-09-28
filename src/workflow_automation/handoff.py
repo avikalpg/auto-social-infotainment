@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 import shutil
 import stat
-import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -12,7 +12,6 @@ from typing import Any
 
 from .media import ffprobe_validate, sha256_file
 from .notebook import ingest_download_receipt
-from .packages import atomic_json
 from .state import utcnow
 
 
@@ -90,27 +89,116 @@ def _verify_receipt_metadata(
         raise ValueError("notebook artifact receipt duration_seconds does not match ffprobe result")
 
 
-def _atomic_copy(source: Path, destination: Path) -> Path:
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    parent = destination.parent.resolve()
-    directory_fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-    fd, temporary_name = tempfile.mkstemp(
-        dir=str(parent), prefix=f".{destination.name}.", suffix=".tmp"
+@contextmanager
+def _open_contained_directory(directory: Path, root: Path) -> Iterator[tuple[int, Path]]:
+    """Create and pin a directory whose opened target remains within a trusted root."""
+    resolved_root = root.resolve(strict=True)
+    try:
+        directory.resolve().relative_to(resolved_root)
+    except ValueError as error:
+        raise ValueError(f"handoff root escapes allowed handoff root: {directory}") from error
+    root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    directory_fd: int | None = None
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        directory_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        opened_root = Path(f"/proc/self/fd/{root_fd}").resolve()
+        opened_directory = Path(f"/proc/self/fd/{directory_fd}").resolve()
+        try:
+            opened_directory.relative_to(opened_root)
+        except ValueError as error:
+            raise ValueError(
+                f"handoff root escapes allowed handoff root: {opened_directory}"
+            ) from error
+        yield directory_fd, opened_directory
+    finally:
+        if directory_fd is not None:
+            os.close(directory_fd)
+        os.close(root_fd)
+
+
+def _open_regular_at(directory_fd: int, name: str) -> int:
+    fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory_fd)
+    if not stat.S_ISREG(os.fstat(fd).st_mode):
+        os.close(fd)
+        raise ValueError(f"handoff destination is not a regular file: {name}")
+    return fd
+
+
+def _temporary_name(destination_name: str) -> str:
+    return f".{destination_name}.{secrets.token_hex(12)}.tmp"
+
+
+def _atomic_copy_to_directory(
+    source: Path, directory_fd: int, directory: Path, destination_name: str
+) -> Path:
+    try:
+        existing = os.stat(destination_name, dir_fd=directory_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        pass
+    else:
+        if not stat.S_ISREG(existing.st_mode):
+            raise ValueError(
+                f"handoff destination is not a regular file: {directory / destination_name}"
+            )
+
+    temporary_name = _temporary_name(destination_name)
+    fd = os.open(
+        temporary_name,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+        0o600,
+        dir_fd=directory_fd,
     )
-    temporary = Path(temporary_name)
     try:
         with source.open("rb") as reader, os.fdopen(fd, "wb") as writer:
             shutil.copyfileobj(reader, writer, length=1024 * 1024)
             writer.flush()
             os.fsync(writer.fileno())
-        os.replace(temporary, destination.name, dst_dir_fd=directory_fd)
+        os.replace(
+            temporary_name,
+            destination_name,
+            src_dir_fd=directory_fd,
+            dst_dir_fd=directory_fd,
+        )
         os.fsync(directory_fd)
-        return parent / destination.name
+        return directory / destination_name
     except Exception:
-        temporary.unlink(missing_ok=True)
+        try:
+            os.unlink(temporary_name, dir_fd=directory_fd)
+        except FileNotFoundError:
+            pass
         raise
-    finally:
-        os.close(directory_fd)
+
+
+def _atomic_json_to_directory(
+    directory_fd: int, destination_name: str, data: dict[str, Any]
+) -> None:
+    temporary_name = _temporary_name(destination_name)
+    fd = os.open(
+        temporary_name,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+        0o600,
+        dir_fd=directory_fd,
+    )
+    try:
+        payload = (json.dumps(data, indent=2, sort_keys=True) + "\n").encode()
+        with os.fdopen(fd, "wb") as writer:
+            writer.write(payload)
+            writer.flush()
+            os.fsync(writer.fileno())
+        os.replace(
+            temporary_name,
+            destination_name,
+            src_dir_fd=directory_fd,
+            dst_dir_fd=directory_fd,
+        )
+        os.fsync(directory_fd)
+    except Exception:
+        try:
+            os.unlink(temporary_name, dir_fd=directory_fd)
+        except FileNotFoundError:
+            pass
+        raise
 
 
 def handoff_notebooklm_video(
@@ -118,6 +206,7 @@ def handoff_notebooklm_video(
     *,
     allowed_output_root: Path,
     handoff_root: Path,
+    allowed_handoff_root: Path,
     expected_request_id: str | None = None,
     expected_story_id: str | None = None,
     expected_request_token: str | None = None,
@@ -167,34 +256,45 @@ def handoff_notebooklm_video(
         raise ValueError(f"notebook artifact does not exist: {source}")
 
     expected_sha = str(artifact["sha256"])
-    destination = handoff_root / "notebooklm-original.mp4"
     with _open_contained_source(source, allowed_output_root) as pinned_source:
         actual_sha = sha256_file(pinned_source)
         if actual_sha != expected_sha:
             raise ValueError("notebook artifact sha256 does not match worker receipt")
         media = ffprobe_validate(pinned_source, ffprobe_bin)
         _verify_receipt_metadata(artifact, media, pinned_source, actual_sha)
-        destination = _atomic_copy(pinned_source, destination)
-    with _open_contained_source(destination, destination.parent) as pinned_destination:
-        copied_sha = sha256_file(pinned_destination)
-    if copied_sha != actual_sha:
-        destination.unlink(missing_ok=True)
-        raise RuntimeError("artifact handoff copy sha256 mismatch")
+        with _open_contained_directory(handoff_root, allowed_handoff_root) as (
+            handoff_fd,
+            opened_handoff_root,
+        ):
+            destination = _atomic_copy_to_directory(
+                pinned_source,
+                handoff_fd,
+                opened_handoff_root,
+                "notebooklm-original.mp4",
+            )
+            destination_fd = _open_regular_at(handoff_fd, destination.name)
+            try:
+                copied_sha = sha256_file(Path(f"/proc/self/fd/{destination_fd}"))
+            finally:
+                os.close(destination_fd)
+            if copied_sha != actual_sha:
+                os.unlink(destination.name, dir_fd=handoff_fd)
+                raise RuntimeError("artifact handoff copy sha256 mismatch")
 
-    handoff = {
-        "schema_version": 1,
-        "story_id": artifact["story_id"],
-        "request_id": artifact["request_id"],
-        "source_receipt": str(receipt_path.resolve()),
-        "source_video": str(source.resolve()),
-        "video_path": str(destination.resolve()),
-        "sha256": copied_sha,
-        "media": media,
-        "handed_off_at": utcnow(),
-    }
-    if "artifact_title" in evidence:
-        handoff["artifact_title"] = evidence["artifact_title"]
-    if "notebook_url" in receipt_data:
-        handoff["notebook_url"] = receipt_data["notebook_url"]
-    atomic_json(handoff_root / "handoff.json", handoff)
+            handoff = {
+                "schema_version": 1,
+                "story_id": artifact["story_id"],
+                "request_id": artifact["request_id"],
+                "source_receipt": str(receipt_path.resolve()),
+                "source_video": str(source.resolve()),
+                "video_path": str(destination),
+                "sha256": copied_sha,
+                "media": media,
+                "handed_off_at": utcnow(),
+            }
+            if "artifact_title" in evidence:
+                handoff["artifact_title"] = evidence["artifact_title"]
+            if "notebook_url" in receipt_data:
+                handoff["notebook_url"] = receipt_data["notebook_url"]
+            _atomic_json_to_directory(handoff_fd, "handoff.json", handoff)
     return handoff

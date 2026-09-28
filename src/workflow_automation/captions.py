@@ -26,24 +26,27 @@ def available_caption_context(source: dict[str, Any]) -> dict[str, str]:
 
 def validate_caption_request(data: dict[str, Any]) -> None:
     required = {"schema_version", "story_id", "final_script", "source_context", "output_path"}
-    missing = sorted(
-        key
-        for key in required
-        if key not in data or (isinstance(data[key], str) and not data[key].strip())
-    )
+    missing = sorted(key for key in required if key not in data)
     if missing:
         raise ValueError(f"caption request missing required keys: {', '.join(missing)}")
     if set(data) != required:
         extra = sorted(set(data) - required)
         raise ValueError(f"caption request has unsupported keys: {', '.join(extra)}")
-    if data["schema_version"] != 1:
+    if (
+        isinstance(data["schema_version"], bool)
+        or not isinstance(data["schema_version"], int)
+        or data["schema_version"] != 1
+    ):
         raise ValueError("caption request schema_version must be 1")
+    for key in ("story_id", "final_script", "output_path"):
+        if not isinstance(data[key], str) or not data[key].strip():
+            raise ValueError(f"caption request {key} must be a non-empty string")
     if not isinstance(data["source_context"], dict) or any(
         not isinstance(key, str) or not isinstance(value, str) or not value.strip()
         for key, value in data["source_context"].items()
     ):
         raise ValueError("caption request source_context must be an object of non-empty strings")
-    if not Path(str(data["output_path"])).is_absolute():
+    if not Path(data["output_path"]).is_absolute():
         raise ValueError("caption request output_path must be an absolute path")
 
 

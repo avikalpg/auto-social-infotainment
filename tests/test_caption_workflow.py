@@ -168,7 +168,8 @@ class CaptionWorkflowTests(unittest.TestCase):
 
             run_stage(state, "video_produced", cfg, dry_run=True)
 
-            self.assertEqual(state.stages["video_produced"].status, "done")
+            self.assertEqual(state.stages["video_produced"].status, "dry_run")
+            self.assertEqual(state.stages["video_produced"].attempts, 0)
             verification = state.stages["video_produced"].verification
             self.assertIn("planned", verification)
             self.assertIn("caption", verification["planned"])
@@ -216,9 +217,16 @@ class CaptionWorkflowTests(unittest.TestCase):
                 },
             )
 
+            run_stage(state, "video_queued", cfg, dry_run=True)
+
+            self.assertEqual(state.stages["video_queued"].status, "dry_run")
+            self.assertEqual(state.stages["video_queued"].attempts, 0)
+            self.assertNotIn("generation_receipt_path", state.artifacts)
+
             run_stage(state, "video_queued", cfg)
 
             self.assertEqual(state.stages["video_queued"].status, "done")
+            self.assertEqual(state.stages["video_queued"].attempts, 1)
             receipt_path = Path(state.artifacts["generation_receipt_path"])
             self.assertTrue(receipt_path.is_file())
             request = json.loads((request_dir / "STR-012.generation.request.json").read_text())
@@ -295,6 +303,24 @@ class CaptionWorkflowTests(unittest.TestCase):
         cfg = SimpleNamespace(max_retries=3)
         with self.assertRaisesRegex(RuntimeError, "must be queued"):
             run_stage(state, "video_produced", cfg, dry_run=True)
+
+    def test_caption_contract_rejects_non_string_fields_and_boolean_schema(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = {
+                "schema_version": 1,
+                "story_id": "STR-008",
+                "final_script": "Final script",
+                "source_context": {},
+                "output_path": str(Path(temporary) / "caption.md"),
+            }
+            for key, value in (
+                ("story_id", {}),
+                ("final_script", 123),
+                ("output_path", []),
+                ("schema_version", True),
+            ):
+                with self.subTest(key=key), self.assertRaisesRegex(ValueError, key):
+                    validate_caption_request(dict(base, **{key: value}))
 
     def test_caption_contract_rejects_unexpected_payload_fields(self):
         with tempfile.TemporaryDirectory() as temporary:

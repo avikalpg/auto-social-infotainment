@@ -78,8 +78,19 @@ def _validate_notebook_url(value: str) -> None:
 def _validate_http_url(value: Any, field: str) -> None:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{field} must be a non-empty string")
+    if "\\" in value or any(character.isspace() or ord(character) < 32 for character in value):
+        raise ValueError(f"{field} must be an HTTP(S) URL")
     split = urlsplit(value)
-    if split.scheme not in {"http", "https"} or not split.hostname:
+    try:
+        _ = split.port
+    except ValueError as error:
+        raise ValueError(f"{field} must be an HTTP(S) URL") from error
+    if (
+        split.scheme not in {"http", "https"}
+        or not split.hostname
+        or split.username is not None
+        or split.password is not None
+    ):
         raise ValueError(f"{field} must be an HTTP(S) URL")
 
 
@@ -235,16 +246,11 @@ def validate_notebook_request(data: dict[str, Any]) -> None:
             raise ValueError("expected_duration_seconds must be positive")
 
 
-def validate_notebook_receipt(
-    data: dict[str, Any], *, allow_root: Path | str | None = None
-) -> None:
-    """Validate a notebook download receipt contract.
+def validate_notebook_receipt(data: dict[str, Any], *, allow_root: Path | str) -> None:
+    """Validate a notebook download receipt against a trusted output root.
 
-    Checks required keys, status, artifact metadata, and evidence shape.
-    If `allow_root` is provided, or if the receipt includes `allow_root`,
-    validates that `output_path` is contained within the allow root.
-    Use `validate_notebook_receipt_containment(data, allow_root)` for strict,
-    mandatory containment validation.
+    A root declared by the receipt is metadata only and can never define its own security
+    boundary.
     """
     if "schema_version" in data and data["schema_version"] != 1:
         raise ValueError("notebook download receipt schema_version must be 1")
@@ -281,12 +287,10 @@ def validate_notebook_receipt(
         not isinstance(data["allow_root"], str) or not data["allow_root"].strip()
     ):
         raise ValueError("notebook download receipt allow_root must be a non-empty string")
-    effective_allow_root = allow_root if allow_root is not None else data.get("allow_root")
-    if effective_allow_root is not None:
-        root_path = Path(str(effective_allow_root))
-        if not root_path.is_absolute():
-            raise ValueError("allow_root must be an absolute path")
-        _absolute_contained_path(output_path, root_path, "output_path")
+    root_path = Path(str(allow_root))
+    if not root_path.is_absolute():
+        raise ValueError("allow_root must be an absolute path")
+    _absolute_contained_path(output_path, root_path, "output_path")
     artifact = data["artifact"]
     if not isinstance(artifact, dict):
         raise TypeError("notebook download receipt artifact must be object")
@@ -350,7 +354,6 @@ def validate_publication_receipt(data: dict[str, Any]) -> None:
     )
     if data["status"] != "published":
         raise ValueError("publisher receipt status must be published")
-    if not str(data["public_url"]).startswith(("https://", "http://")):
-        raise ValueError("publisher receipt public_url must be URL")
+    _validate_http_url(data["public_url"], "publisher receipt public_url")
     if not data["verification_evidence"]:
         raise ValueError("publisher receipt requires verification evidence")

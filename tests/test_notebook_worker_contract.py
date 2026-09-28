@@ -218,7 +218,7 @@ class NotebookWorkerContractTests(unittest.TestCase):
                 "evidence": {"checked": True},
             }
             with self.assertRaisesRegex(ValueError, "output_path"):
-                validate_notebook_receipt(receipt)
+                validate_notebook_receipt(receipt, allow_root=root)
 
     def test_receipt_contract_validates_identity_timestamp_and_notebook_url(self):
         from workflow_automation.contracts import validate_notebook_receipt
@@ -242,7 +242,7 @@ class NotebookWorkerContractTests(unittest.TestCase):
                 },
                 "evidence": {"local_worker": True},
             }
-            validate_notebook_receipt(receipt)
+            validate_notebook_receipt(receipt, allow_root=root)
             for key, value in (
                 ("request_id", 1),
                 ("story_id", " "),
@@ -250,16 +250,19 @@ class NotebookWorkerContractTests(unittest.TestCase):
                 ("output_path", []),
             ):
                 with self.subTest(key=key), self.assertRaisesRegex(ValueError, key):
-                    validate_notebook_receipt(dict(receipt, **{key: value}))
+                    validate_notebook_receipt(dict(receipt, **{key: value}), allow_root=root)
             with self.assertRaisesRegex(ValueError, "NotebookLM URL"):
                 validate_notebook_receipt(
-                    dict(receipt, notebook_url="https://notebook.google.com.evil/notebook/example")
+                    dict(receipt, notebook_url="https://notebook.google.com.evil/notebook/example"),
+                    allow_root=root,
                 )
             for key, value in (("size_bytes", True), ("duration_seconds", False)):
                 with self.subTest(key=key):
                     artifact = dict(receipt["artifact"], **{key: value})
                     with self.assertRaisesRegex(ValueError, key):
-                        validate_notebook_receipt(dict(receipt, artifact=artifact))
+                        validate_notebook_receipt(
+                            dict(receipt, artifact=artifact), allow_root=root
+                        )
 
     def test_python_contract_requires_non_empty_string_types(self):
         from workflow_automation.contracts import validate_notebook_request
@@ -335,17 +338,17 @@ class NotebookWorkerContractTests(unittest.TestCase):
                 },
                 "evidence": {"checked": True},
             }
-            # Without allow_root specified, basic validation passes for absolute paths
-            validate_notebook_receipt(receipt)
+            # The canonical validator cannot be called without a trusted containment root.
+            with self.assertRaises(TypeError):
+                validate_notebook_receipt(receipt)  # type: ignore[call-arg]
 
-            # When allow_root is explicitly passed, receipt fails if output_path is outside
+            # A trusted allow_root rejects receipt paths outside that boundary.
             with self.assertRaisesRegex(ValueError, "within allow_root"):
                 validate_notebook_receipt(receipt, allow_root=allowed)
 
             with self.assertRaisesRegex(ValueError, "within allow_root"):
                 validate_notebook_receipt_containment(receipt, allow_root=allowed)
 
-            # If receipt itself carries allow_root, validate_notebook_receipt enforces it
     def test_worker_fails_closed_on_invalid_or_tampered_existing_artifact(self):
         """Worker fails closed without deleting file or attempting browser download on tampered/invalid file."""
         with tempfile.TemporaryDirectory() as d:
@@ -540,7 +543,7 @@ class NotebookWorkerContractTests(unittest.TestCase):
                 "evidence": {"checked": True},
             }
             with self.assertRaisesRegex(ValueError, "schema_version must be 1"):
-                validate_notebook_receipt(receipt)
+                validate_notebook_receipt(receipt, allow_root=root)
 
             gen_receipt = {
                 "schema_version": 5,
@@ -646,6 +649,7 @@ class NotebookWorkerContractTests(unittest.TestCase):
                     missing_receipt,
                     allowed_output_root=allowed,
                     handoff_root=root / "handoff",
+                    allowed_handoff_root=root,
                 )
 
             # Mismatched request_id
@@ -660,6 +664,7 @@ class NotebookWorkerContractTests(unittest.TestCase):
                     receipt_path,
                     allowed_output_root=allowed,
                     handoff_root=root / "handoff",
+                    allowed_handoff_root=root,
                     expected_request_id="req-2",
                 )
 
@@ -675,6 +680,7 @@ class NotebookWorkerContractTests(unittest.TestCase):
                     receipt_path,
                     allowed_output_root=allowed,
                     handoff_root=root / "handoff",
+                    allowed_handoff_root=root,
                     expected_story_id="story-2",
                 )
 
@@ -684,6 +690,7 @@ class NotebookWorkerContractTests(unittest.TestCase):
                     receipt_path,
                     allowed_output_root=allowed,
                     handoff_root=root / "handoff",
+                    allowed_handoff_root=root,
                     expected_artifact_title="Title 2",
                 )
 
@@ -693,6 +700,7 @@ class NotebookWorkerContractTests(unittest.TestCase):
                     receipt_path,
                     allowed_output_root=allowed,
                     handoff_root=root / "handoff",
+                    allowed_handoff_root=root,
                     expected_notebook_url="https://notebook.google.com/notebook/other",
                 )
 

@@ -38,13 +38,18 @@ def run_stage(state: StoryState, stage: str, cfg: Config, dry_run: bool = False)
     rec = state.stages[stage]
     if rec.status == "done":
         return
-    if rec.attempts >= cfg.max_retries:
+    if not dry_run and rec.attempts >= cfg.max_retries:
         raise RuntimeError(f"retry budget exhausted for {stage}")
-    rec.attempts += 1
+    if not dry_run:
+        rec.attempts += 1
     rec.status = "running"
     rec.updated_at = utcnow()
     try:
         _execute_stage(state, stage, cfg, dry_run=dry_run)
+        if dry_run:
+            # A simulation must remain rerunnable and cannot satisfy a production prerequisite.
+            rec.status = "dry_run"
+            rec.updated_at = utcnow()
     except Exception as exc:
         rec.status = "failed"
         rec.error = str(exc)
@@ -178,6 +183,7 @@ def _execute_stage(state: StoryState, stage: str, cfg: Config, dry_run: bool = F
                 receipt_path,
                 allowed_output_root=cfg.notebooklm_output_root,
                 handoff_root=handoff_root,
+                allowed_handoff_root=cfg.content_root,
                 expected_request_id=expected_req_id,
                 expected_story_id=state.story_id,
                 expected_request_token=request_token,

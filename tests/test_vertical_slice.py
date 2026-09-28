@@ -167,6 +167,27 @@ class VerticalSliceTests(unittest.TestCase):
         status = json.loads((pkg / "publication-status.json").read_text())
         self.assertIn("generic-platform", status["platforms"])
 
+    def test_publication_receipt_rejects_malformed_or_credentialed_urls(self):
+        base = {
+            "platform": "generic-platform",
+            "status": "published",
+            "public_url": "https://example.com/post?id=1#result",
+            "timestamp": "2026-01-01T00:00:00Z",
+            "verification_evidence": {"checked": True},
+        }
+        validate_publication_receipt(base)
+        for public_url in (
+            "https://",
+            "ftp://example.com/post",
+            "https://user:password@example.com/post",
+            "https://example.com\\malicious",
+            "https://example.com\nmalicious",
+        ):
+            with self.subTest(public_url=public_url), self.assertRaisesRegex(
+                ValueError, "public_url"
+            ):
+                validate_publication_receipt(dict(base, public_url=public_url))
+
     def test_content_package_rejects_non_media_without_ffprobe(self):
         if not FFPROBE:
             self.skipTest("ffprobe required")

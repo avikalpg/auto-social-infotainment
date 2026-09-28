@@ -225,6 +225,66 @@ class CaptionWorkflowTests(unittest.TestCase):
             self.assertEqual(request["focus_prompt"], "Focus on the disputed decision.")
             self.assertIn("receipt", state.stages["video_queued"].verification)
 
+    def test_video_produced_rejects_story_identity_changed_after_queueing(self):
+        from types import SimpleNamespace
+
+        from workflow_automation.runner import run_stage
+        from workflow_automation.state import StoryState
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            request_dir = root / "requests"
+            request_dir.mkdir()
+            output_root = root / "downloads"
+            output_root.mkdir()
+            outro = root / "outro.mp4"
+            outro.write_bytes(b"placeholder")
+            receipt_path = request_dir / "STR-014.generation.receipt.json"
+            receipt_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "request_id": "notebooklm-generation-STR-014",
+                        "story_id": "STR-014",
+                        "request_token": "notebooklm-generation-STR-014",
+                        "status": "queued",
+                        "artifact_title": "Original title",
+                        "notebook_url": "https://notebook.google.com/notebook/test-1",
+                        "video_format": "Short",
+                        "timestamp": "2026-09-27T00:00:00Z",
+                        "evidence": {
+                            "generation_only": True,
+                            "download_attempted": False,
+                            "generation_state": "queued",
+                        },
+                    }
+                )
+            )
+            cfg = SimpleNamespace(
+                notebooklm_worker_cmd=("true",),
+                caption_generator_cmd=("true",),
+                branded_outro_path=outro,
+                notebooklm_output_root=output_root,
+                notebooklm_request_dir=request_dir,
+                notebooklm_cdp_url=None,
+                content_root=root / "content",
+                ffmpeg_bin="ffmpeg",
+                ffprobe_bin="ffprobe",
+                max_retries=3,
+            )
+            state = StoryState(
+                "STR-014",
+                source={
+                    "notebook_url": "https://notebook.google.com/notebook/test-1",
+                    "artifact_title": "Edited title",
+                },
+            )
+            state.stages["video_queued"].status = "done"
+            state.artifacts["generation_receipt_path"] = str(receipt_path)
+
+            with self.assertRaisesRegex(ValueError, "artifact_title"):
+                run_stage(state, "video_produced", cfg)
+
     def test_video_produced_requires_generation_queue_confirmation(self):
         from types import SimpleNamespace
 

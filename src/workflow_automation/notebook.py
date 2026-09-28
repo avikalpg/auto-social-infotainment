@@ -74,6 +74,7 @@ def write_download_request(
     request_id: str,
     story_id: str,
     notebook_url: str,
+    request_token: str | None = None,
     artifact_title: str,
     output_path: Path,
     allow_root: Path,
@@ -94,6 +95,8 @@ def write_download_request(
         "allow_root": str(allow_root),
         "timestamp": utcnow(),
     }
+    if request_token is not None:
+        req["request_token"] = request_token
     if receipt_path is not None:
         req["receipt_path"] = str(receipt_path)
     if expected_format:
@@ -118,6 +121,8 @@ def ingest_download_receipt(
     allow_root: Path | str,
     expected_request_id: str | None = None,
     expected_story_id: str | None = None,
+    expected_request_token: str | None = None,
+    expected_video_format: str | None = None,
 ) -> dict[str, Any]:
     if not path.is_file():
         raise FileNotFoundError(f"notebook download receipt not found: {path}")
@@ -131,12 +136,26 @@ def ingest_download_receipt(
         raise ValueError(
             f"download receipt story_id mismatch: expected {expected_story_id}, got {data.get('story_id')}"
         )
+    if expected_request_token is not None and data.get("request_token") != expected_request_token:
+        raise ValueError(
+            "download receipt request_token mismatch: "
+            f"expected {expected_request_token}, got {data.get('request_token')}"
+        )
+    if expected_video_format is not None and data.get("video_format") != expected_video_format:
+        raise ValueError(
+            "download receipt video_format mismatch: "
+            f"expected {expected_video_format}, got {data.get('video_format')}"
+        )
     artifact = dict(data["artifact"])
     artifact["output_path"] = data.get("output_path")
     if "allow_root" in data:
         artifact["allow_root"] = data["allow_root"]
     artifact["request_id"] = data["request_id"]
     artifact["story_id"] = data["story_id"]
+    if "request_token" in data:
+        artifact["request_token"] = data["request_token"]
+    if "video_format" in data:
+        artifact["video_format"] = data["video_format"]
     return artifact
 
 

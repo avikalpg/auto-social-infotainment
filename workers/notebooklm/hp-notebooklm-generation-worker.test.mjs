@@ -142,7 +142,7 @@ test('generation worker resolves receipt parents and rejects escaping symlinks',
       child.on('close', (code) => resolve({ code, output }));
     });
     assert.notEqual(result.code, 0);
-    assert.match(result.output, /resolves outside configured allow_root/);
+    assert.match(result.output, /parent must not contain symlinks/);
   } finally {
     await fs.rm(root, { recursive: true, force: true });
     await fs.rm(outside, { recursive: true, force: true });

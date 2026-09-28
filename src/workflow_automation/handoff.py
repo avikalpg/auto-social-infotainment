@@ -120,6 +120,8 @@ def handoff_notebooklm_video(
     handoff_root: Path,
     expected_request_id: str | None = None,
     expected_story_id: str | None = None,
+    expected_request_token: str | None = None,
+    expected_video_format: str | None = None,
     expected_notebook_url: str | None = None,
     expected_artifact_title: str | None = None,
     ffprobe_bin: str = "ffprobe",
@@ -134,6 +136,8 @@ def handoff_notebooklm_video(
         allow_root=allowed_output_root,
         expected_request_id=expected_request_id,
         expected_story_id=expected_story_id,
+        expected_request_token=expected_request_token,
+        expected_video_format=expected_video_format,
     )
     receipt_data = json.loads(receipt_path.read_text())
     evidence = receipt_data.get("evidence", {})

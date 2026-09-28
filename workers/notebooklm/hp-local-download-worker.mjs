@@ -7,15 +7,33 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const REQUIRED = ['request_id','story_id','notebook_url','artifact_title','output_path','allow_root'];
-const ALLOWED = new Set(['schema_version',...REQUIRED,'receipt_path','expected_format','expected_container','expected_duration_seconds','cdp_url','ffprobe_bin','timestamp']);
+const ALLOWED = new Set(['schema_version',...REQUIRED,'request_token','receipt_path','expected_format','expected_container','expected_duration_seconds','cdp_url','ffprobe_bin','timestamp']);
 const fail = (message) => { throw new Error(message); };
 const inside = (child, root) => { const rel=path.relative(root, child); return rel === '' || (rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel)); };
 async function safePath(candidate, root, field) {
  if(typeof candidate!=='string'||!path.isAbsolute(candidate)) fail(`${field} must be an absolute path`);
  if(typeof root!=='string'||!path.isAbsolute(root)) fail('allow_root must be an absolute path');
- const lexical=path.resolve(candidate); await fs.mkdir(root,{recursive:true}); const realRoot=await fs.realpath(root);
- await fs.mkdir(path.dirname(lexical),{recursive:true}); const realParent=await fs.realpath(path.dirname(lexical));
- if(!inside(realParent,realRoot)) fail(`${field} resolves outside configured allow_root`);
+ const lexical=path.resolve(candidate); const lexicalRoot=path.resolve(root);
+ // Reject lexical escapes before creating anything supplied by the request.
+ if(!inside(lexical,lexicalRoot)) fail(`${field} resolves outside configured allow_root`);
+ await fs.mkdir(lexicalRoot,{recursive:true});
+ if((await fs.lstat(lexicalRoot)).isSymbolicLink()) fail('allow_root must not be a symlink');
+ const realRoot=await fs.realpath(lexicalRoot);
+ const relativeParent=path.relative(lexicalRoot,path.dirname(lexical));
+ let current=lexicalRoot;
+ for(const component of relativeParent.split(path.sep).filter(Boolean)){
+  current=path.join(current,component);
+  try {
+   const stat=await fs.lstat(current);
+   if(stat.isSymbolicLink()) fail(`${field} parent must not contain symlinks`);
+   if(!stat.isDirectory()) fail(`${field} parent must be a directory`);
+  } catch(e) {
+   if(e?.code!=='ENOENT') throw e;
+   await fs.mkdir(current);
+  }
+  if(!inside(await fs.realpath(current),realRoot)) fail(`${field} resolves outside configured allow_root`);
+ }
+ const realParent=await fs.realpath(path.dirname(lexical));
  try { if((await fs.lstat(lexical)).isSymbolicLink()) fail(`${field} must not be a symlink`); } catch(e) { if(e?.code!=='ENOENT') throw e; }
  return path.join(realParent,path.basename(lexical));
 }
@@ -55,17 +73,34 @@ export async function validate(req){
  for(const k of REQUIRED){
    if(typeof req[k]!=='string'||!req[k].trim())fail(`${k} must be a non-empty string`);
  }
+ if(req.request_token!==undefined&&(typeof req.request_token!=='string'||!req.request_token.trim()))fail('request_token must be a non-empty string');
  const extra=Object.keys(req).filter(k=>!ALLOWED.has(k));if(extra.length)fail(`unsupported request keys: ${extra.sort().join(', ')}`);
  validateNotebookUrl(req.notebook_url);
+ if(req.expected_format!==undefined&&req.expected_format!=='Short')fail('expected_format must be Short');
  if(req.expected_duration_seconds!==undefined&&(typeof req.expected_duration_seconds!=='number'||!Number.isFinite(req.expected_duration_seconds)||req.expected_duration_seconds<=0))fail('expected_duration_seconds must be a positive number');
  req.output_path=await safePath(req.output_path,req.allow_root,'output_path');
  req.receipt_path=await safePath(req.receipt_path||path.join(req.allow_root,`${req.request_id}.receipt.json`),req.allow_root,'receipt_path');
 }
 function verifyExpected(a,req){
- // expected_format names the NotebookLM overview requested upstream (for example, Short).
- // It is not a file-container assertion. expected_container is the optional media assertion.
+ // expected_format names the queued NotebookLM overview, not a media container.
  if(req.expected_container&&!a.container.toLowerCase().split(',').map(x=>x.trim()).includes(String(req.expected_container).toLowerCase())) fail(`container ${a.container} does not include expected container ${req.expected_container}`);
  if(req.expected_duration_seconds!=null&&Math.abs(a.duration_seconds-Number(req.expected_duration_seconds))>2)fail(`duration ${a.duration_seconds} differs from expected ${req.expected_duration_seconds}`);
+}
+function normalizedContainer(value){return String(value||'').split(',').map(x=>x.trim().toLowerCase()).filter(Boolean).sort().join(',');}
+export function verifyExistingReceipt(receipt,req,artifact){
+ if(!receipt||receipt.schema_version!==1||receipt.status!=='done')fail('existing output requires a valid completed receipt');
+ for(const key of ['request_id','story_id','notebook_url','output_path']){
+  if(receipt[key]!==req[key])fail(`existing receipt ${key} does not match request`);
+ }
+ if(req.request_token&&receipt.request_token!==req.request_token)fail('existing receipt request_token does not match request');
+ if(req.expected_format&&receipt.video_format!==req.expected_format)fail('existing receipt video_format does not match request');
+ if(receipt.evidence?.artifact_title!==req.artifact_title)fail('existing receipt artifact_title does not match request');
+ const recorded=receipt.artifact||{};
+ for(const key of ['size_bytes','sha256'])if(recorded[key]!==artifact[key])fail(`existing receipt artifact ${key} does not match output`);
+ if(normalizedContainer(recorded.container)!==normalizedContainer(artifact.container))fail('existing receipt artifact container does not match output');
+ if(Math.abs(Number(recorded.duration_seconds)-artifact.duration_seconds)>0.01)fail('existing receipt artifact duration does not match output');
+ if(JSON.stringify(recorded.dimensions)!==JSON.stringify(artifact.dimensions))fail('existing receipt artifact dimensions do not match output');
+ if(JSON.stringify(recorded.codecs)!==JSON.stringify(artifact.codecs))fail('existing receipt artifact codecs do not match output');
 }
 async function main(){
  const requestFile=process.argv[2]; if(!requestFile)fail('usage: hp-local-download-worker.mjs REQUEST.json'); const req=JSON.parse(await fs.readFile(requestFile,'utf8')); await validate(req); const receipt=req.receipt_path;
@@ -78,17 +113,23 @@ async function main(){
  if (existingStat) {
    const a = await probe(req.output_path, req.ffprobe_bin);
    verifyExpected(a, req);
+   let priorReceipt;
+   try { priorReceipt=JSON.parse(await fs.readFile(receipt,'utf8')); }
+   catch(e) { if(e?.code==='ENOENT')fail('existing output requires a matching receipt'); throw e; }
+   verifyExistingReceipt(priorReceipt,req,a);
    const r = {
      schema_version: 1,
      request_id: req.request_id,
      story_id: req.story_id,
+     ...(req.request_token ? {request_token:req.request_token} : {}),
      status: 'done',
      notebook_url: req.notebook_url,
+     ...(req.expected_format ? {video_format:req.expected_format} : {}),
      output_path: req.output_path,
      allow_root: req.allow_root,
      timestamp: new Date().toISOString(),
      artifact: a,
-     evidence: { idempotent_existing: true, artifact_title: req.artifact_title, local_worker: true }
+     evidence: { ...priorReceipt.evidence, idempotent_existing: true, artifact_title: req.artifact_title, local_worker: true }
    };
    await atomicJson(receipt, r);
    console.log(JSON.stringify(r));
@@ -112,7 +153,7 @@ async function main(){
     const a=await probe(temporary,req.ffprobe_bin);
     verifyExpected(a,req);
     await publishVerifiedDownload(temporary,req.output_path);
-    const r={schema_version:1,request_id:req.request_id,story_id:req.story_id,status:'done',notebook_url:req.notebook_url,output_path:req.output_path,allow_root:req.allow_root,timestamp:new Date().toISOString(),artifact:a,evidence:{idempotent_existing:false,artifact_title:req.artifact_title,suggested_filename:download.suggestedFilename(),selector_attempts:attempt,download_failure:null,local_worker:true}};
+    const r={schema_version:1,request_id:req.request_id,story_id:req.story_id,...(req.request_token?{request_token:req.request_token}:{}),status:'done',notebook_url:req.notebook_url,...(req.expected_format?{video_format:req.expected_format}:{}),output_path:req.output_path,allow_root:req.allow_root,timestamp:new Date().toISOString(),artifact:a,evidence:{idempotent_existing:false,artifact_title:req.artifact_title,suggested_filename:download.suggestedFilename(),selector_attempts:attempt,download_failure:null,local_worker:true}};
     await atomicJson(receipt,r);
     console.log(JSON.stringify(r));
     return;

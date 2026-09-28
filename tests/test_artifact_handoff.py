@@ -207,7 +207,10 @@ class ArtifactHandoffTests(unittest.TestCase):
                 "schema_version": 1,
                 "request_id": "notebooklm-STR-009",
                 "story_id": "STR-009",
+                "request_token": "notebooklm-generation-STR-009",
                 "status": "done",
+                "notebook_url": "https://notebook.google.com/notebook/test-1",
+                "video_format": "Short",
                 "output_path": str(source_video),
                 "allow_root": str(output_root),
                 "timestamp": "2026-09-27T00:00:00Z",
@@ -219,10 +222,31 @@ class ArtifactHandoffTests(unittest.TestCase):
                     "codecs": {"video": "h264", "audio": "aac"},
                     "sha256": sha256_file(source_video),
                 },
-                "evidence": {"local_worker": True},
+                "evidence": {"local_worker": True, "artifact_title": "Test Title"},
             }
             receipt_path = req_dir / "STR-009.receipt.json"
             receipt_path.write_text(json.dumps(receipt))
+            generation_receipt_path = req_dir / "STR-009.generation.receipt.json"
+            generation_receipt_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "request_id": "notebooklm-generation-STR-009",
+                        "story_id": "STR-009",
+                        "request_token": "notebooklm-generation-STR-009",
+                        "status": "queued",
+                        "artifact_title": "Test Title",
+                        "notebook_url": "https://notebook.google.com/notebook/test-1",
+                        "video_format": "Short",
+                        "timestamp": "2026-09-27T00:00:00Z",
+                        "evidence": {
+                            "generation_only": True,
+                            "download_attempted": False,
+                            "generation_state": "queued",
+                        },
+                    }
+                )
+            )
 
             # Helper script simulating caption generator writing output caption
             caption_script = root / "mock_caption_gen.py"
@@ -253,6 +277,7 @@ class ArtifactHandoffTests(unittest.TestCase):
                 },
             )
             state.artifacts["wispr_final_script"] = "Wispr narrative script."
+            state.artifacts["generation_receipt_path"] = str(generation_receipt_path)
             state.stages["video_queued"].status = "done"
 
             run_stage(state, "video_produced", cfg, dry_run=False)

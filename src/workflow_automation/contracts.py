@@ -169,6 +169,7 @@ def validate_notebook_request(data: dict[str, Any]) -> None:
         "schema_version",
         "request_id",
         "story_id",
+        "request_token",
         "notebook_url",
         "artifact_title",
         "expected_format",
@@ -193,6 +194,11 @@ def validate_notebook_request(data: dict[str, Any]) -> None:
         if not isinstance(val, str) or not val.strip():
             raise ValueError(f"notebook download request {key} must be a non-empty string")
 
+    if "request_token" in data and (
+        not isinstance(data["request_token"], str) or not data["request_token"].strip()
+    ):
+        raise ValueError("notebook download request request_token must be a non-empty string")
+
     extra = set(data) - allowed
     if extra:
         raise ValueError(
@@ -215,10 +221,8 @@ def validate_notebook_request(data: dict[str, Any]) -> None:
         not isinstance(data["ffprobe_bin"], str) or not data["ffprobe_bin"].strip()
     ):
         raise ValueError("ffprobe_bin must be a non-empty string")
-    if "expected_format" in data and (
-        not isinstance(data["expected_format"], str) or not data["expected_format"].strip()
-    ):
-        raise ValueError("expected_format must be a non-empty NotebookLM overview format")
+    if "expected_format" in data and data["expected_format"] != "Short":
+        raise ValueError("expected_format must be Short")
     if "expected_container" in data and (
         not isinstance(data["expected_container"], str) or not data["expected_container"].strip()
     ):
@@ -260,6 +264,12 @@ def validate_notebook_receipt(
     for key in ("request_id", "story_id", "output_path", "timestamp"):
         if not isinstance(data[key], str) or not data[key].strip():
             raise ValueError(f"notebook download receipt {key} must be a non-empty string")
+    if "request_token" in data and (
+        not isinstance(data["request_token"], str) or not data["request_token"].strip()
+    ):
+        raise ValueError("notebook download receipt request_token must be a non-empty string")
+    if "video_format" in data and data["video_format"] != "Short":
+        raise ValueError("notebook download receipt video_format must be Short")
     if data["status"] != "done":
         raise ValueError("notebook download receipt status must be done")
     if "notebook_url" in data:

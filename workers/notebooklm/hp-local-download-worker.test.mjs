@@ -4,7 +4,12 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { publishVerifiedDownload, validate, validateNotebookUrl } from './hp-local-download-worker.mjs';
+import {
+  publishVerifiedDownload,
+  validate,
+  validateNotebookUrl,
+  verifyExistingReceipt,
+} from './hp-local-download-worker.mjs';
 
 test('download worker validateNotebookUrl accepts valid NotebookLM URLs', () => {
   assert.equal(
@@ -84,6 +89,13 @@ test('download worker validate rejects missing or non-string or whitespace-only 
     );
   }
 
+  for (const format of ['', 'Long', 'Explainer']) {
+    await assert.rejects(
+      () => validate({ ...baseReq, expected_format: format }),
+      /expected_format must be Short/,
+    );
+  }
+
   for (const [key, val] of badCases) {
     const req = { ...baseReq, [key]: val };
     await assert.rejects(
@@ -114,4 +126,44 @@ test('verified downloads publish atomically without replacing an existing artifa
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
+});
+test('existing outputs require a matching receipt identity and hash', () => {
+  const req = {
+    request_id: 'download-1',
+    story_id: 'STR-001',
+    request_token: 'generation-1',
+    notebook_url: 'https://notebook.google.com/notebook/example',
+    artifact_title: 'Short overview',
+    output_path: '/tmp/video.mp4',
+    expected_format: 'Short',
+  };
+  const artifact = {
+    size_bytes: 2048,
+    container: 'mov,mp4',
+    duration_seconds: 60,
+    dimensions: { width: 1080, height: 1920 },
+    codecs: { video: 'h264', audio: 'aac' },
+    sha256: 'a'.repeat(64),
+  };
+  const receipt = {
+    schema_version: 1,
+    request_id: req.request_id,
+    story_id: req.story_id,
+    request_token: req.request_token,
+    status: 'done',
+    notebook_url: req.notebook_url,
+    video_format: 'Short',
+    output_path: req.output_path,
+    artifact,
+    evidence: { artifact_title: req.artifact_title },
+  };
+  assert.doesNotThrow(() => verifyExistingReceipt(receipt, req, artifact));
+  assert.throws(
+    () => verifyExistingReceipt({ ...receipt, request_token: 'other' }, req, artifact),
+    /request_token does not match/,
+  );
+  assert.throws(
+    () => verifyExistingReceipt({ ...receipt, artifact: { ...artifact, sha256: 'b'.repeat(64) } }, req, artifact),
+    /sha256 does not match/,
+  );
 });

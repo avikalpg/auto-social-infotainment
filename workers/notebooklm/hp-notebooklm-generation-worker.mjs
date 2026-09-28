@@ -50,12 +50,34 @@ export function isWithin(child, root) {
 }
 
 export async function assertRealContained(destination, allowRoot) {
-  await fs.mkdir(allowRoot, { recursive: true });
-  const realRoot = await fs.realpath(allowRoot);
-  await fs.mkdir(path.dirname(destination), { recursive: true });
-  const realParent = await fs.realpath(path.dirname(destination));
-  if (!isWithin(realParent, realRoot)) throw new Error('receipt_path resolves outside configured allow_root');
-  return path.join(realParent, path.basename(destination));
+  const lexicalRoot = path.resolve(allowRoot);
+  const lexicalDestination = path.resolve(destination);
+  if (!isWithin(lexicalDestination, lexicalRoot)) {
+    throw new Error('receipt_path resolves outside configured allow_root');
+  }
+  await fs.mkdir(lexicalRoot, { recursive: true });
+  if ((await fs.lstat(lexicalRoot)).isSymbolicLink()) {
+    throw new Error('allow_root must not be a symlink');
+  }
+  const realRoot = await fs.realpath(lexicalRoot);
+  const relativeParent = path.relative(lexicalRoot, path.dirname(lexicalDestination));
+  let current = lexicalRoot;
+  for (const component of relativeParent.split(path.sep).filter(Boolean)) {
+    current = path.join(current, component);
+    try {
+      const stat = await fs.lstat(current);
+      if (stat.isSymbolicLink()) throw new Error('receipt_path parent must not contain symlinks');
+      if (!stat.isDirectory()) throw new Error('receipt_path parent must be a directory');
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error;
+      await fs.mkdir(current);
+    }
+    if (!isWithin(await fs.realpath(current), realRoot)) {
+      throw new Error('receipt_path resolves outside configured allow_root');
+    }
+  }
+  const realParent = await fs.realpath(path.dirname(lexicalDestination));
+  return path.join(realParent, path.basename(lexicalDestination));
 }
 
 export function validateNotebookUrl(value) {

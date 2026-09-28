@@ -110,22 +110,12 @@ def _execute_stage(state: StoryState, stage: str, cfg: Config, dry_run: bool = F
         out = cfg.notebooklm_output_root / f"{state.story_id}-notebooklm.mp4"
         req_path = cfg.notebooklm_request_dir / f"{state.story_id}.request.json"
         receipt_path = cfg.notebooklm_request_dir / f"{state.story_id}.receipt.json"
-        write_download_request(
-            req_path,
-            request_id=f"notebooklm-{state.story_id}",
-            story_id=state.story_id,
-            notebook_url=str(src["notebook_url"]),
-            artifact_title=str(src["artifact_title"]),
-            output_path=Path(src.get("notebooklm_output_path") or out),
-            allow_root=cfg.notebooklm_output_root,
-            receipt_path=receipt_path,
-            expected_format=src.get("expected_format"),
-            expected_container=src.get("expected_container"),
-            expected_duration_seconds=src.get("expected_duration_seconds"),
-            cdp_url=cfg.notebooklm_cdp_url,
-            ffprobe_bin=cfg.ffprobe_bin,
-        )
-        # Validate required adapters/assets before expensive download/handoff/ffmpeg work
+        generation_request_id = f"notebooklm-generation-{state.story_id}"
+        request_token = str(src.get("request_token") or generation_request_id)
+        expected_format = str(src.get("expected_format") or "Short")
+
+        # Validate required adapters/assets before expensive download/handoff/ffmpeg work.
+        # A real run must also be bound to the exact generation receipt that queued it.
         if not dry_run:
             if not cfg.caption_generator_cmd:
                 raise AdapterNotConfigured(
@@ -136,6 +126,39 @@ def _execute_stage(state: StoryState, stage: str, cfg: Config, dry_run: bool = F
                     "branded outro asset is required for video production; configure "
                     "branded_outro_path to a silent, dimension-matched MP4"
                 )
+            generation_receipt_path = state.artifacts.get("generation_receipt_path")
+            if not generation_receipt_path:
+                raise RuntimeError("queued NotebookLM generation receipt is required before download")
+            generation_receipt = ingest_generation_receipt(
+                Path(str(generation_receipt_path)),
+                request_id=generation_request_id,
+                story_id=state.story_id,
+                request_token=request_token,
+            )
+            if generation_receipt["artifact_title"] != src["artifact_title"]:
+                raise ValueError("queued generation artifact_title does not match current story")
+            if generation_receipt["notebook_url"] != src["notebook_url"]:
+                raise ValueError("queued generation notebook_url does not match current story")
+            if expected_format != generation_receipt["video_format"]:
+                raise ValueError("queued generation video_format does not match download request")
+            expected_format = generation_receipt["video_format"]
+
+        write_download_request(
+            req_path,
+            request_id=f"notebooklm-{state.story_id}",
+            story_id=state.story_id,
+            request_token=request_token,
+            notebook_url=str(src["notebook_url"]),
+            artifact_title=str(src["artifact_title"]),
+            output_path=Path(src.get("notebooklm_output_path") or out),
+            allow_root=cfg.notebooklm_output_root,
+            receipt_path=receipt_path,
+            expected_format=expected_format,
+            expected_container=src.get("expected_container"),
+            expected_duration_seconds=src.get("expected_duration_seconds"),
+            cdp_url=cfg.notebooklm_cdp_url,
+            ffprobe_bin=cfg.ffprobe_bin,
+        )
 
         result = CommandAdapter(
             "HP-local NotebookLM Playwright worker", cfg.notebooklm_worker_cmd
@@ -147,6 +170,8 @@ def _execute_stage(state: StoryState, stage: str, cfg: Config, dry_run: bool = F
                 allow_root=cfg.notebooklm_output_root,
                 expected_request_id=expected_req_id,
                 expected_story_id=state.story_id,
+                expected_request_token=request_token,
+                expected_video_format=expected_format,
             )
             handoff_root = cfg.content_root / ".handoff" / state.story_id
             handoff = handoff_notebooklm_video(
@@ -155,6 +180,8 @@ def _execute_stage(state: StoryState, stage: str, cfg: Config, dry_run: bool = F
                 handoff_root=handoff_root,
                 expected_request_id=expected_req_id,
                 expected_story_id=state.story_id,
+                expected_request_token=request_token,
+                expected_video_format=expected_format,
                 expected_notebook_url=str(src["notebook_url"]),
                 expected_artifact_title=str(src["artifact_title"]),
                 ffprobe_bin=cfg.ffprobe_bin,

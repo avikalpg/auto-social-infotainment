@@ -1,3 +1,4 @@
+import hashlib
 import json
 import shutil
 import subprocess
@@ -9,6 +10,27 @@ WORKER = (
     Path(__file__).resolve().parents[1] / "workers" / "notebooklm" / "hp-local-download-worker.mjs"
 )
 FFMPEG = shutil.which("ffmpeg")
+FFPROBE = shutil.which("ffprobe")
+
+
+def probe_artifact(path: Path) -> dict[str, object]:
+    raw = subprocess.run(
+        [FFPROBE, "-v", "error", "-print_format", "json", "-show_format", "-show_streams", str(path)],
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    data = json.loads(raw.stdout)
+    video = next(stream for stream in data["streams"] if stream["codec_type"] == "video")
+    audio = next((stream for stream in data["streams"] if stream["codec_type"] == "audio"), None)
+    return {
+        "size_bytes": path.stat().st_size,
+        "container": data["format"]["format_name"],
+        "duration_seconds": float(data["format"].get("duration") or video["duration"]),
+        "dimensions": {"width": video["width"], "height": video["height"]},
+        "codecs": {"video": video["codec_name"], "audio": audio["codec_name"] if audio else None},
+        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+    }
 
 
 class NotebookWorkerContractTests(unittest.TestCase):
@@ -79,9 +101,28 @@ class NotebookWorkerContractTests(unittest.TestCase):
                 },
             )
             self.assertNotEqual(proc.returncode, 0)
-            self.assertIn("resolves outside configured allow_root", proc.stderr + proc.stdout)
+            self.assertIn("parent must not contain symlinks", proc.stderr + proc.stdout)
 
-    @unittest.skipUnless(FFMPEG, "ffmpeg required for download-worker integration test")
+    def test_worker_rejects_lexical_escape_before_creating_parent_directories(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            allowed = root / "allowed"
+            outside_parent = root / "outside" / "created-too-early"
+            proc = self.run_worker(
+                root,
+                {
+                    "request_id": "r1",
+                    "story_id": "s1",
+                    "notebook_url": "https://notebook.google.com/notebook/example",
+                    "artifact_title": "Generic Artifact",
+                    "output_path": str(outside_parent / "out.mp4"),
+                    "allow_root": str(allowed),
+                },
+            )
+            self.assertNotEqual(proc.returncode, 0)
+            self.assertFalse(outside_parent.exists())
+
+    @unittest.skipUnless(FFMPEG and FFPROBE, "ffmpeg/ffprobe required for download-worker integration test")
     def test_short_overview_format_is_not_compared_to_mp4_container(self):
         """Existing artifact path deterministically exercises the worker's post-download handoff."""
         with tempfile.TemporaryDirectory() as d:
@@ -107,20 +148,34 @@ class NotebookWorkerContractTests(unittest.TestCase):
                 ],
                 check=True,
             )
-            proc = self.run_worker(
-                root,
-                {
-                    "request_id": "r1",
-                    "story_id": "s1",
-                    "notebook_url": "https://notebook.google.com/notebook/example",
-                    "artifact_title": "Short overview",
-                    "output_path": str(output),
-                    "receipt_path": str(allowed / "receipt.json"),
-                    "allow_root": str(allowed),
-                    "expected_format": "Short",
-                    "expected_container": "mp4",
-                },
-            )
+            request = {
+                "request_id": "r1",
+                "story_id": "s1",
+                "request_token": "generation-r1",
+                "notebook_url": "https://notebook.google.com/notebook/example",
+                "artifact_title": "Short overview",
+                "output_path": str(output),
+                "receipt_path": str(allowed / "receipt.json"),
+                "allow_root": str(allowed),
+                "expected_format": "Short",
+                "expected_container": "mp4",
+            }
+            prior_receipt = {
+                "schema_version": 1,
+                "request_id": request["request_id"],
+                "story_id": request["story_id"],
+                "request_token": request["request_token"],
+                "status": "done",
+                "notebook_url": request["notebook_url"],
+                "video_format": "Short",
+                "output_path": request["output_path"],
+                "allow_root": request["allow_root"],
+                "timestamp": "2026-09-27T00:00:00Z",
+                "artifact": probe_artifact(output),
+                "evidence": {"artifact_title": request["artifact_title"], "local_worker": True},
+            }
+            (allowed / "receipt.json").write_text(json.dumps(prior_receipt))
+            proc = self.run_worker(root, request)
             self.assertEqual(proc.returncode, 0, proc.stderr)
             receipt = json.loads((allowed / "receipt.json").read_text())
             self.assertIn("mp4", receipt["artifact"]["container"])
@@ -244,6 +299,11 @@ class NotebookWorkerContractTests(unittest.TestCase):
                 with self.subTest(expected_duration_seconds=duration):
                     invalid = dict(base_request, expected_duration_seconds=duration)
                     with self.assertRaisesRegex(ValueError, "expected_duration_seconds"):
+                        validate_notebook_request(invalid)
+            for invalid_format in ("Long", "Explainer", ""):
+                with self.subTest(expected_format=invalid_format):
+                    invalid = dict(base_request, expected_format=invalid_format)
+                    with self.assertRaisesRegex(ValueError, "expected_format must be Short"):
                         validate_notebook_request(invalid)
 
     def test_receipt_containment_validation(self):

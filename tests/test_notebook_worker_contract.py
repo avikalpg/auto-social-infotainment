@@ -487,6 +487,10 @@ class NotebookWorkerContractTests(unittest.TestCase):
             resolved = validate_notebook_receipt_containment(contained_receipt, allowed)
             self.assertEqual(resolved, (allowed / "out.mp4").resolve())
 
+            contradictory_receipt = dict(contained_receipt, allow_root=str(outside))
+            with self.assertRaisesRegex(ValueError, "does not match trusted root"):
+                validate_notebook_receipt(contradictory_receipt, allow_root=allowed)
+
     def test_python_contract_rejects_prefix_confusion_notebook_urls(self):
         from workflow_automation.contracts import validate_notebook_request
 

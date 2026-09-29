@@ -188,6 +188,12 @@ class ArtifactHandoffTests(unittest.TestCase):
             self.assertEqual(
                 canonical_pcm_sha256(handed_off, FFMPEG), canonical_pcm_sha256(final, FFMPEG)
             )
+            self.assertTrue(result["audio"]["packet_payload_matches_original"])
+            self.assertEqual(
+                result["audio"]["original_packet_sha256"],
+                result["audio"]["final_packet_sha256"],
+            )
+            self.assertEqual(result["audio"]["stream_metadata"]["codec_name"], "aac")
             self.assertTrue(result["timeline"]["silent_outro_verified"])
             self.assertGreater(
                 result["timeline"]["final_video_seconds"],

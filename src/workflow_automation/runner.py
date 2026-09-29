@@ -28,6 +28,17 @@ STAGE_TO_ADAPTER = {
 }
 
 
+def _inline_request_plan(
+    command: tuple[str, ...] | None, request: dict[str, object]
+) -> dict[str, object]:
+    """Describe a dry-run worker invocation without referencing a file that was not written."""
+    return {
+        "dry_run": True,
+        "command": list(command) if command else None,
+        "input": {"transport": "in_memory_json", "request": request},
+    }
+
+
 def mark_done(state: StoryState, stage: str, verification: dict[str, object]) -> None:
     rec = state.stages[stage]
     rec.status = "done"
@@ -91,14 +102,12 @@ def _execute_stage(state: StoryState, stage: str, cfg: Config, dry_run: bool = F
         }
         if dry_run:
             request = build_generation_request(**generation_request)
+            result = _inline_request_plan(cfg.notebooklm_generation_worker_cmd, request)
         else:
             request = write_generation_request(request_path, **generation_request)
-        if dry_run and not cfg.notebooklm_generation_worker_cmd:
-            result: dict[str, object] = {"dry_run": True, "command": None}
-        else:
             result = CommandAdapter(
                 "HP-local NotebookLM generation worker", cfg.notebooklm_generation_worker_cmd
-            ).run([str(request_path)], dry_run)
+            ).run([str(request_path)])
         result["request"] = request
         if not dry_run:
             receipt = ingest_generation_receipt(
@@ -178,12 +187,12 @@ def _execute_stage(state: StoryState, stage: str, cfg: Config, dry_run: bool = F
         }
         if dry_run:
             request = build_download_request(**download_request)
+            result = _inline_request_plan(cfg.notebooklm_worker_cmd, request)
         else:
             request = write_download_request(req_path, **download_request)
-
-        result = CommandAdapter(
-            "HP-local NotebookLM Playwright worker", cfg.notebooklm_worker_cmd
-        ).run([str(req_path)], dry_run)
+            result = CommandAdapter(
+                "HP-local NotebookLM Playwright worker", cfg.notebooklm_worker_cmd
+            ).run([str(req_path)])
         result["request"] = request
         if not dry_run:
             expected_req_id = f"notebooklm-{state.story_id}"

@@ -384,6 +384,12 @@ def validate_notebook_receipt(data: dict[str, Any], *, allow_root: Path | str) -
     root_path = Path(str(allow_root))
     if not root_path.is_absolute():
         raise ValueError("allow_root must be an absolute path")
+    if "allow_root" in data:
+        declared_root = Path(data["allow_root"])
+        if not declared_root.is_absolute():
+            raise ValueError("notebook download receipt allow_root must be an absolute path")
+        if declared_root.resolve() != root_path.resolve():
+            raise ValueError("notebook download receipt allow_root does not match trusted root")
     _absolute_contained_path(output_path, root_path, "output_path")
     artifact = data["artifact"]
     if not isinstance(artifact, dict):

@@ -97,6 +97,91 @@ def canonical_pcm_sha256(path: Path, ffmpeg_bin: str = "ffmpeg") -> str:
     return digest.hexdigest()
 
 
+def audio_packet_sha256(path: Path, ffmpeg_bin: str = "ffmpeg") -> str:
+    """Hash the first audio stream's compressed packet payload without re-encoding it."""
+    with tempfile.TemporaryFile() as stderr:
+        proc = subprocess.Popen(
+            [
+                ffmpeg_bin,
+                "-v",
+                "error",
+                "-i",
+                str(path),
+                "-map",
+                "0:a:0",
+                "-vn",
+                "-c:a",
+                "copy",
+                "-f",
+                "data",
+                "-",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=stderr,
+        )
+        if proc.stdout is None:
+            proc.kill()
+            proc.wait()
+            raise RuntimeError("ffmpeg audio packet extraction stdout pipe was not created")
+
+        digest = hashlib.sha256()
+        try:
+            for chunk in iter(lambda: proc.stdout.read(1024 * 1024), b""):
+                digest.update(chunk)
+        except BaseException:
+            proc.kill()
+            proc.wait()
+            raise
+        finally:
+            proc.stdout.close()
+
+        returncode = proc.wait()
+        if returncode != 0:
+            stderr.seek(0)
+            message = stderr.read().decode(errors="replace").strip()
+            raise RuntimeError(f"ffmpeg audio packet extraction failed for {path}: {message}")
+    return digest.hexdigest()
+
+
+def _audio_stream_signature(media: dict[str, Any]) -> dict[str, object]:
+    stream = next(item for item in media["streams"] if item.get("codec_type") == "audio")
+    keys = (
+        "codec_name",
+        "profile",
+        "codec_tag_string",
+        "sample_fmt",
+        "sample_rate",
+        "channels",
+        "channel_layout",
+        "extradata_size",
+    )
+    return {key: stream.get(key) for key in keys}
+
+
+def verify_audio_stream_preserved(
+    original: Path,
+    final: Path,
+    original_media: dict[str, Any],
+    final_media: dict[str, Any],
+    ffmpeg_bin: str = "ffmpeg",
+) -> dict[str, object]:
+    """Verify compressed packet payload and stable codec properties survived the remux."""
+    original_signature = _audio_stream_signature(original_media)
+    final_signature = _audio_stream_signature(final_media)
+    if original_signature != final_signature:
+        raise ValueError("audio stream metadata changed while appending the branded outro")
+    original_sha = audio_packet_sha256(original, ffmpeg_bin)
+    final_sha = audio_packet_sha256(final, ffmpeg_bin)
+    if original_sha != final_sha:
+        raise ValueError("compressed audio packet SHA-256 mismatch after branded outro append")
+    return {
+        "original_packet_sha256": original_sha,
+        "final_packet_sha256": final_sha,
+        "packet_payload_matches_original": True,
+        "stream_metadata": original_signature,
+    }
+
+
 def verify_canonical_pcm_equal(
     original: Path, final: Path, ffmpeg_bin: str = "ffmpeg"
 ) -> dict[str, object]:
@@ -278,8 +363,17 @@ def append_branded_outro_preserve_audio(
         )
         if proc.returncode != 0:
             raise RuntimeError(f"ffmpeg branded outro append failed: {proc.stderr.strip()}")
-        verification = verify_canonical_pcm_equal(original_video, tmp, ffmpeg_bin)
         media = ffprobe_validate(tmp, ffprobe_bin)
+        verification = verify_canonical_pcm_equal(original_video, tmp, ffmpeg_bin)
+        verification.update(
+            verify_audio_stream_preserved(
+                original_video,
+                tmp,
+                original_media,
+                media,
+                ffmpeg_bin,
+            )
+        )
         source_video_duration = _stream_duration(original_media, "video")
         source_audio_duration = _stream_duration(original_media, "audio")
         outro_video_duration = _stream_duration(outro_media, "video")

@@ -176,6 +176,8 @@ class CaptionWorkflowTests(unittest.TestCase):
             self.assertIn("caption", verification["planned"])
             self.assertIn("content_package", verification["planned"])
             self.assertIsNone(verification["command"])
+            self.assertEqual(verification["input"]["transport"], "in_memory_json")
+            self.assertEqual(verification["input"]["request"]["story_id"], "STR-011")
             self.assertTrue(verification["planned"]["caption"]["generator"]["dry_run"])
             self.assertIsNone(verification["planned"]["caption"]["generator"]["command"])
             self.assertFalse((req_dir / "STR-011.request.json").exists())
@@ -227,6 +229,10 @@ class CaptionWorkflowTests(unittest.TestCase):
             self.assertEqual(state.stages["video_queued"].attempts, 0)
             self.assertNotIn("generation_receipt_path", state.artifacts)
             self.assertFalse((request_dir / "STR-012.generation.request.json").exists())
+            plan = state.stages["video_queued"].verification
+            self.assertEqual(plan["command"], ["python3", str(worker)])
+            self.assertEqual(plan["input"]["transport"], "in_memory_json")
+            self.assertEqual(plan["input"]["request"], plan["request"])
 
             run_stage(state, "video_queued", cfg)
 

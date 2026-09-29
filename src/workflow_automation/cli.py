@@ -186,6 +186,11 @@ def resume(args: argparse.Namespace, cfg: Config) -> int:
     for stage in STAGES:
         if not stage_satisfies_prerequisite(st, stage, args.dry_run):
             if args.dry_run and stage.endswith("_published"):
+                # load_or_create() may have hydrated source metadata. Persist that canonical
+                # state under the workflow lock before ending the multi-stage dry-run.
+                with FileLock(cfg.lock_path):
+                    st = load_or_create(store, cfg, st.story_id)
+                    store.save(st)
                 print(
                     json.dumps(
                         {

@@ -14,7 +14,7 @@ Production-grade Python 3.11+ foundation for the social-content workflow.
 - Browser/device stages are command adapters. If not configured they fail clearly rather than fake success.
 - Verification gates: ffprobe validation for produced media paths and audio SHA-256 hooks.
 
-NotebookLM rule: production video generation must run through an HP-local Playwright worker. Azure-side code must never download NotebookLM assets. When replacing outros, preserve the source audio byte-for-byte and verify hashes.
+NotebookLM rule: production video generation must run through an HP-local Playwright worker. Azure-side code must never download NotebookLM assets. When replacing outros, stream-copy the source audio, verify the compressed packet payload byte-for-byte, and independently verify the decoded canonical PCM and stable codec properties.
 
 ### HP NotebookLM generation worker
 
@@ -25,6 +25,8 @@ Its request is strict JSON: `request_id`, `story_id`, `notebook_url` (an `https:
 The workflow integrates generation as the `video_queued` stage. `queue-video` writes the generation request, invokes `notebooklm_generation_worker_cmd`, validates the request-specific queued receipt, and persists that evidence. `produce-video` refuses to start the download stage until `video_queued` is done, so asynchronous NotebookLM generation remains an explicit resumable boundary. Stories must provide `notebook_url`, `artifact_title`, and `focus_prompt` before queueing.
 
 Dry runs do not require configured worker adapters or generated media, and they never write worker request files into production request directories. They still validate and record the NotebookLM request identity in stage verification. A story must therefore provide the required NotebookLM metadata even when simulating `queue-video` or `produce-video`. `resume --dry-run` stops before the first publication stage so its persisted state cannot look publication-ready; use an explicit `publish-* --dry-run` command to inspect an individual publisher plan.
+
+Dry-run worker plans carry their validated request as `input.transport: "in_memory_json"`; they do not advertise a command argument that points to a request file that was intentionally not written.
 
 ```bash
 node workers/notebooklm/hp-notebooklm-generation-worker.mjs request.json
@@ -81,6 +83,8 @@ Key commands:
 
 Notebook worker contracts are JSON request/receipt files. Download requests require an absolute `receipt_path` contained by their trusted `allow_root`; the worker never derives or mutates that destination. Download receipts must be `done` and include `output_path`, verified `artifact` media metadata (`size_bytes`, `container`, `duration_seconds`, `dimensions`, `codecs`, `sha256`), and execution `evidence`:
 
+The lower-level download contract keeps `request_token` optional for compatibility with standalone download clients. The integrated `queue-video` to `produce-video` pipeline always writes it and rejects a generation or download receipt that omits or changes it, so tokenless requests cannot satisfy the pipeline's queue-to-download identity binding.
+
 ```json
 {
   "request_id": "...",
@@ -104,4 +108,4 @@ Content packages contain `manifest.json`, `caption.md`, `publication-status.json
 
 After Wispr has produced the final script, its integration stores the text in `state.artifacts.wispr_final_script`. `produce-video` then writes a strict caption-generator request and invokes `caption_generator_cmd`. The request contains only that final script plus available `source_title`, `source_url`, `primary_subject`, `main_character`, and `primary_tension` context, then asks the generator to write platform copy to `output_path`. A story must not provide `caption` or `caption_markdown` before video generation.
 
-The ffmpeg outro utility muxes replacement visuals with the original audio stream, extracts pre/post audio as canonical PCM, and fails unless SHA-256 hashes match.
+The ffmpeg outro utility muxes replacement visuals with the original audio stream and fails unless compressed packet SHA-256, decoded canonical PCM SHA-256, and stable audio codec properties all match.

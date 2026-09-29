@@ -163,7 +163,7 @@ class StateTrackerTests(unittest.TestCase):
             state.stages["video_queued"].status = "dry_run"
             state.stages["video_produced"].status = "dry_run"
             store.save(state)
-            cfg = SimpleNamespace(state_dir=store.state_dir)
+            cfg = SimpleNamespace(state_dir=store.state_dir, lock_path=root / "workflow.lock")
             args = SimpleNamespace(story_id=state.story_id, dry_run=True)
 
             output = StringIO()
@@ -188,6 +188,42 @@ class StateTrackerTests(unittest.TestCase):
                 self.assertEqual(persisted.stages[stage].status, "pending")
                 self.assertEqual(persisted.stages[stage].verification, {})
             self.assertNotIn("package_dir", persisted.artifacts)
+
+    def test_resume_dry_run_persists_hydrated_source_before_publication_boundary(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            store = StateStore(root / "state")
+            state = StoryState("story-dry-run", source={"source_id": "SRC-001"})
+            for stage in ("extracted", "video_queued", "video_produced"):
+                state.stages[stage].status = "dry_run"
+            store.save(state)
+            sources = root / "sources.json"
+            sources.write_text(
+                json.dumps(
+                    {
+                        "sources": [
+                            {
+                                "id": "SRC-001",
+                                "notebook_url": "https://notebook.google.com/notebook/example",
+                            }
+                        ]
+                    }
+                )
+            )
+            cfg = SimpleNamespace(
+                state_dir=store.state_dir,
+                lock_path=root / "workflow.lock",
+                sources_path=sources,
+            )
+            args = SimpleNamespace(story_id=state.story_id, dry_run=True)
+
+            with redirect_stdout(StringIO()):
+                self.assertEqual(resume(args, cfg), 0)
+
+            self.assertEqual(
+                store.load(state.story_id).source["notebook_url"],
+                "https://notebook.google.com/notebook/example",
+            )
 
     def test_publication_dry_run_does_not_require_adapter(self):
         from workflow_automation.runner import run_stage

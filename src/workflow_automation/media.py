@@ -158,6 +158,33 @@ def _audio_stream_signature(media: dict[str, Any]) -> dict[str, object]:
     return {key: stream.get(key) for key in keys}
 
 
+def _supports_packet_payload_verification(
+    original_media: dict[str, Any], final_media: dict[str, Any]
+) -> bool:
+    """Return whether byte-for-byte packet checks are portable for this media pair.
+
+    The production path is tested for AAC in MP4-family containers. Other muxers may
+    legitimately alter codec framing during a stream-copy remux even when codec
+    parameters and decoded PCM remain identical.
+    """
+    original_signature = _audio_stream_signature(original_media)
+    final_signature = _audio_stream_signature(final_media)
+    original_containers = {
+        item.strip().lower()
+        for item in str(original_media.get("format", {}).get("format_name") or "").split(",")
+    }
+    final_containers = {
+        item.strip().lower()
+        for item in str(final_media.get("format", {}).get("format_name") or "").split(",")
+    }
+    return (
+        original_signature.get("codec_name") == "aac"
+        and final_signature.get("codec_name") == "aac"
+        and "mp4" in original_containers
+        and "mp4" in final_containers
+    )
+
+
 def verify_audio_stream_preserved(
     original: Path,
     final: Path,
@@ -165,21 +192,38 @@ def verify_audio_stream_preserved(
     final_media: dict[str, Any],
     ffmpeg_bin: str = "ffmpeg",
 ) -> dict[str, object]:
-    """Verify compressed packet payload and stable codec properties survived the remux."""
+    """Verify stable codec properties and, for AAC/MP4, compressed packet payloads."""
     original_signature = _audio_stream_signature(original_media)
     final_signature = _audio_stream_signature(final_media)
     if original_signature != final_signature:
         raise ValueError("audio stream metadata changed while appending the branded outro")
+    result: dict[str, object] = {
+        "stream_metadata": original_signature,
+    }
+    if not _supports_packet_payload_verification(original_media, final_media):
+        result.update(
+            {
+                "packet_payload_verification": "skipped_unsupported_media_matrix",
+                "original_packet_sha256": None,
+                "final_packet_sha256": None,
+                "packet_payload_matches_original": None,
+            }
+        )
+        return result
+
     original_sha = audio_packet_sha256(original, ffmpeg_bin)
     final_sha = audio_packet_sha256(final, ffmpeg_bin)
     if original_sha != final_sha:
         raise ValueError("compressed audio packet SHA-256 mismatch after branded outro append")
-    return {
-        "original_packet_sha256": original_sha,
-        "final_packet_sha256": final_sha,
-        "packet_payload_matches_original": True,
-        "stream_metadata": original_signature,
-    }
+    result.update(
+        {
+            "packet_payload_verification": "enforced_aac_mp4",
+            "original_packet_sha256": original_sha,
+            "final_packet_sha256": final_sha,
+            "packet_payload_matches_original": True,
+        }
+    )
+    return result
 
 
 def verify_canonical_pcm_equal(

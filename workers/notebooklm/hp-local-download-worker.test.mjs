@@ -8,6 +8,7 @@ import {
   atomicJson,
   publishVerifiedDownload,
   validate,
+  validateCdpUrl,
   validateNotebookUrl,
   verifyExistingReceipt,
 } from './hp-local-download-worker.mjs';
@@ -67,6 +68,40 @@ test('download worker validateNotebookUrl rejects invalid schemes, hosts, paths,
       /notebook_url must be a NotebookLM URL/,
       `Expected ${url} to be rejected`
     );
+  }
+});
+
+test('download worker rejects unsafe CDP URLs', async () => {
+  const invalidUrls = [
+    'ftp://127.0.0.1:9222',
+    'http://user:password@127.0.0.1:9222',
+    'http://127.0.0.1:9222 bad',
+    'http:\\127.0.0.1:9222',
+    'http:///missing-host',
+  ];
+  for (const url of invalidUrls) {
+    assert.throws(() => validateCdpUrl(url), /without credentials/);
+  }
+
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'notebooklm-download-'));
+  try {
+    for (const cdpUrl of invalidUrls) {
+      await assert.rejects(
+        () => validate({
+          request_id: 'r1',
+          story_id: 's1',
+          notebook_url: 'https://notebook.google.com/notebook/example',
+          artifact_title: 'Artifact',
+          output_path: path.join(root, 'out.mp4'),
+          receipt_path: path.join(root, 'receipt.json'),
+          allow_root: root,
+          cdp_url: cdpUrl,
+        }),
+        /without credentials/,
+      );
+    }
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
   }
 });
 

@@ -118,6 +118,34 @@ export function validateNotebookUrl(value) {
   return url.toString();
 }
 
+export function validateCdpUrl(value) {
+  if (
+    typeof value !== 'string' ||
+    !value.trim() ||
+    value.includes('\\') ||
+    [...value].some((character) => /\s/.test(character) || character.charCodeAt(0) < 32)
+  ) {
+    throw new Error('cdp_url must be an HTTP(S) URL without credentials');
+  }
+  let cdp;
+  try {
+    cdp = new URL(value);
+  } catch {
+    throw new Error('cdp_url must be an HTTP(S) URL without credentials');
+  }
+  const authority = value.match(/^https?:\/\/([^/?#]+)/)?.[1];
+  if (
+    !['http:', 'https:'].includes(cdp.protocol) ||
+    !authority ||
+    !cdp.hostname ||
+    cdp.username ||
+    cdp.password
+  ) {
+    throw new Error('cdp_url must be an HTTP(S) URL without credentials');
+  }
+  return value;
+}
+
 export function validateRequest(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     throw new Error('request must be a JSON object');
@@ -140,18 +168,6 @@ export function validateRequest(raw) {
   if (raw.timestamp !== undefined && (typeof raw.timestamp !== 'string' || !raw.timestamp.trim())) {
     throw new Error('timestamp must be a non-empty string');
   }
-  if (raw.cdp_url !== undefined) {
-    let cdp;
-    try {
-      cdp = new URL(raw.cdp_url);
-    } catch {
-      throw new Error('cdp_url must be an http(s) URL');
-    }
-    if (!['http:', 'https:'].includes(cdp.protocol)) {
-      throw new Error('cdp_url must be an http(s) URL');
-    }
-  }
-
   const allowRoot = assertLocalAbsolutePath(raw.allow_root, 'allow_root');
   const receiptPath = assertLocalAbsolutePath(raw.receipt_path, 'receipt_path');
   if (!isWithin(receiptPath, allowRoot)) {
@@ -170,7 +186,7 @@ export function validateRequest(raw) {
     focus_prompt: raw.focus_prompt.trim(),
     receipt_path: receiptPath,
     allow_root: allowRoot,
-    cdp_url: raw.cdp_url || DEFAULT_CDP_URL,
+    cdp_url: validateCdpUrl(raw.cdp_url || DEFAULT_CDP_URL),
     ...(raw.timestamp ? { timestamp: raw.timestamp } : {}),
   };
 }
@@ -214,7 +230,9 @@ export async function writeAtomicJson(destination, data, allowRoot) {
     await handle.sync();
     await handle.close();
     handle = undefined;
-    await fs.rename(temporary, pinnedDestination);
+    // Publish without replacing a receipt another worker created concurrently.
+    await fs.link(temporary, pinnedDestination);
+    await fs.unlink(temporary);
     await directoryHandle.sync();
   } finally {
     await handle?.close().catch(() => {});

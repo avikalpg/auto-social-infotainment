@@ -10,6 +10,7 @@ import {
   buildReceipt,
   formatPromptWithToken,
   matchingQueueState,
+  validateCdpUrl,
   validateNotebookUrl,
   validateRequest,
   writeAtomicJson,
@@ -60,6 +61,19 @@ test('generation request accepts only the documented contract and NotebookLM URL
       () => validateRequest(request(root, { receipt_path: path.join(root, '..', 'escape.json') })),
       /outside configured allow_root/,
     );
+    for (const cdpUrl of [
+      'ftp://127.0.0.1:9222',
+      'http://user:password@127.0.0.1:9222',
+      'http://127.0.0.1:9222 bad',
+      'http:\\127.0.0.1:9222',
+      'http:///missing-host',
+    ]) {
+      assert.throws(() => validateCdpUrl(cdpUrl), /without credentials/);
+      assert.throws(
+        () => validateRequest(request(root, { cdp_url: cdpUrl })),
+        /without credentials/,
+      );
+    }
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
@@ -156,6 +170,26 @@ test('atomic receipt publication rejects a symlink destination', async () => {
   } finally {
     await fs.rm(root, { recursive: true, force: true });
     await fs.rm(outside, { recursive: true, force: true });
+  }
+});
+
+test('atomic receipt publication preserves an existing concurrent result', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'notebooklm-generation-'));
+  try {
+    const destination = path.join(root, 'receipts', 'request-1.json');
+    const first = { status: 'queued', request_id: 'first' };
+    await writeAtomicJson(destination, first, root);
+    await assert.rejects(
+      () => writeAtomicJson(destination, { status: 'error', request_id: 'second' }, root),
+      (error) => error?.code === 'EEXIST',
+    );
+    assert.deepEqual(JSON.parse(await fs.readFile(destination, 'utf8')), first);
+    assert.equal(
+      await fs.readdir(path.dirname(destination)).then((files) => files.some((file) => file.endsWith('.tmp'))),
+      false,
+    );
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
   }
 });
 

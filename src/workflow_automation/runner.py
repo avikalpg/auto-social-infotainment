@@ -204,6 +204,10 @@ def _execute_stage(state: StoryState, stage: str, cfg: Config, dry_run: bool = F
                 expected_request_token=request_token,
                 expected_video_format=expected_format,
             )
+            # A fresh deployment may not have produced a content package yet. Establish
+            # the configured trusted root before the symlink-resistant handoff helper
+            # opens and pins it; the helper still rejects a symlink at this path.
+            cfg.content_root.mkdir(parents=True, exist_ok=True)
             handoff_root = cfg.content_root / ".handoff" / state.story_id
             handoff = handoff_notebooklm_video(
                 receipt_path,

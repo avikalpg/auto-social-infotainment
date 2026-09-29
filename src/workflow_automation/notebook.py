@@ -221,7 +221,8 @@ def ingest_download_receipt(
     return artifact
 
 
-# Backward-compatible aliases intentionally now enforce the new download contract.
+# Legacy function names are retained for import compatibility. Their payload contract is
+# intentionally strict and requires the NotebookLM metadata used by the current worker.
 def write_worker_request(path: Path, story: dict[str, Any], output_dir: Path) -> dict[str, Any]:
     required = ("id", "notebook_url", "artifact_title")
     missing = [

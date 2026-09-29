@@ -14,7 +14,7 @@ Production-grade Python 3.11+ foundation for the social-content workflow.
 - Browser/device stages are command adapters. If not configured they fail clearly rather than fake success.
 - Verification gates: ffprobe validation for produced media paths and audio SHA-256 hooks.
 
-NotebookLM rule: production video generation must run through an HP-local Playwright worker. Azure-side code must never download NotebookLM assets. When replacing outros, stream-copy the source audio, verify the compressed packet payload byte-for-byte, and independently verify the decoded canonical PCM and stable codec properties.
+NotebookLM rule: production video generation must run through an HP-local Playwright worker. Azure-side code must never download NotebookLM assets. When replacing outros, stream-copy the source audio and independently verify decoded canonical PCM and stable codec properties. The tested AAC-in-MP4 production path also verifies the compressed packet payload byte-for-byte; other containers and codecs skip that non-portable packet-byte assertion because remuxers may legitimately alter framing.
 
 ### HP NotebookLM generation worker
 
@@ -85,6 +85,8 @@ Notebook worker contracts are JSON request/receipt files. Download requests requ
 
 The lower-level download contract keeps `request_token` optional for compatibility with standalone download clients. The integrated `queue-video` to `produce-video` pipeline always writes it and rejects a generation or download receipt that omits or changes it, so tokenless requests cannot satisfy the pipeline's queue-to-download identity binding.
 
+The legacy Python helper names `write_worker_request()` and `ingest_worker_receipt()` remain importable, but they intentionally enforce the current strict download contract. `write_worker_request()` therefore requires story-level `notebook_url` and `artifact_title`; it does not hydrate the older `{id, main_character, primary_tension}` story shape.
+
 ```json
 {
   "request_id": "...",
@@ -108,4 +110,4 @@ Content packages contain `manifest.json`, `caption.md`, `publication-status.json
 
 After Wispr has produced the final script, its integration stores the text in `state.artifacts.wispr_final_script`. `produce-video` then writes a strict caption-generator request and invokes `caption_generator_cmd`. The request contains only that final script plus available `source_title`, `source_url`, `primary_subject`, `main_character`, and `primary_tension` context, then asks the generator to write platform copy to `output_path`. A story must not provide `caption` or `caption_markdown` before video generation.
 
-The ffmpeg outro utility muxes replacement visuals with the original audio stream and fails unless compressed packet SHA-256, decoded canonical PCM SHA-256, and stable audio codec properties all match.
+The ffmpeg outro utility muxes replacement visuals with the original audio stream and fails unless decoded canonical PCM SHA-256 and stable audio codec properties match. For the supported AAC-in-MP4 production matrix, compressed packet SHA-256 must also match; for other media it records that the packet-byte check was skipped rather than treating container-specific reframing as corruption.

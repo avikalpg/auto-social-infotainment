@@ -90,6 +90,14 @@ export function validateNotebookUrl(value) {
  if(url.username||url.password||url.hash) fail('notebook_url must be a NotebookLM URL');
  return url.toString();
 }
+export function validateCdpUrl(value) {
+ if(typeof value!=='string'||!value.trim()||value.includes('\\')||[...value].some(character=>/\s/.test(character)||character.charCodeAt(0)<32))fail('cdp_url must be an HTTP(S) URL without credentials');
+ let url;
+ try { url=new URL(value); } catch { fail('cdp_url must be an HTTP(S) URL without credentials'); }
+ const authority=value.match(/^https?:\/\/([^/?#]+)/)?.[1];
+ if(!['http:','https:'].includes(url.protocol)||!authority||!url.hostname||url.username||url.password)fail('cdp_url must be an HTTP(S) URL without credentials');
+ return value;
+}
 export async function validate(req){
  if(req.schema_version!==undefined&&req.schema_version!==1)fail('schema_version must be 1');
  for(const k of REQUIRED){
@@ -98,6 +106,7 @@ export async function validate(req){
  if(req.request_token!==undefined&&(typeof req.request_token!=='string'||!req.request_token.trim()))fail('request_token must be a non-empty string');
  const extra=Object.keys(req).filter(k=>!ALLOWED.has(k));if(extra.length)fail(`unsupported request keys: ${extra.sort().join(', ')}`);
  validateNotebookUrl(req.notebook_url);
+ if(req.cdp_url!==undefined)req.cdp_url=validateCdpUrl(req.cdp_url);
  if(req.expected_format!==undefined&&req.expected_format!=='Short')fail('expected_format must be Short');
  if(req.expected_duration_seconds!==undefined&&(typeof req.expected_duration_seconds!=='number'||!Number.isFinite(req.expected_duration_seconds)||req.expected_duration_seconds<=0))fail('expected_duration_seconds must be a positive number');
  req.output_path=await safePath(req.output_path,req.allow_root,'output_path');

@@ -13,6 +13,7 @@ from workflow_automation.media import (
     canonical_pcm_sha256,
     ffprobe_validate,
     sha256_file,
+    verify_audio_stream_preserved,
 )
 from workflow_automation.packages import create_content_package, validate_content_package
 
@@ -122,6 +123,31 @@ class CanonicalPcmHashTests(unittest.TestCase):
         self.assertEqual(digest, hashlib.sha256(b"first chunksecond chunk").hexdigest())
         self.assertEqual(stdout.read_sizes, [1024 * 1024] * 3)
         self.assertTrue(stdout.closed)
+
+    @patch("workflow_automation.media.audio_packet_sha256")
+    def test_packet_hash_is_skipped_outside_tested_aac_mp4_matrix(self, packet_hash):
+        media = {
+            "streams": [
+                {
+                    "codec_type": "audio",
+                    "codec_name": "opus",
+                    "sample_rate": "48000",
+                    "channels": 2,
+                }
+            ],
+            "format": {"format_name": "matroska,webm"},
+        }
+
+        result = verify_audio_stream_preserved(
+            Path("original.webm"), Path("final.webm"), media, media
+        )
+
+        packet_hash.assert_not_called()
+        self.assertEqual(
+            result["packet_payload_verification"],
+            "skipped_unsupported_media_matrix",
+        )
+        self.assertIsNone(result["packet_payload_matches_original"])
 
 
 @unittest.skipUnless(FFMPEG and FFPROBE, "ffmpeg/ffprobe required for handoff integration test")
@@ -295,8 +321,8 @@ class ArtifactHandoffTests(unittest.TestCase):
             output_root.mkdir()
             req_dir = output_root / "requests"
             req_dir.mkdir()
+            # A normal first production run starts before this configured root exists.
             content_root = root / "content"
-            content_root.mkdir()
 
             source_video = output_root / "STR-009-notebooklm.mp4"
             make_source_video(source_video)
@@ -385,6 +411,7 @@ class ArtifactHandoffTests(unittest.TestCase):
             run_stage(state, "video_produced", cfg, dry_run=False)
 
             self.assertEqual(state.stages["video_produced"].status, "done")
+            self.assertTrue(content_root.is_dir())
             self.assertIn("video_path", state.artifacts)
             self.assertTrue(Path(state.artifacts["video_path"]).is_file())
             self.assertIn("package_dir", state.artifacts)

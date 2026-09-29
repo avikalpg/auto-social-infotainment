@@ -519,8 +519,12 @@ class NotebookWorkerContractTests(unittest.TestCase):
                 "allow_root": str(root),
                 "output_path": str(root / "out.mp4"),
             }
-            with self.assertRaisesRegex(ValueError, "schema_version must be 1"):
-                validate_notebook_request(req)
+            for schema_version in (2, True, "1"):
+                with (
+                    self.subTest(download_schema_version=schema_version),
+                    self.assertRaisesRegex(ValueError, "schema_version must be 1"),
+                ):
+                    validate_notebook_request(dict(req, schema_version=schema_version))
 
             gen_req = {
                 "schema_version": 99,
@@ -533,8 +537,14 @@ class NotebookWorkerContractTests(unittest.TestCase):
                 "allow_root": str(root),
                 "receipt_path": str(root / "receipt.json"),
             }
-            with self.assertRaisesRegex(ValueError, "schema_version must be 1"):
-                validate_notebook_generation_request(gen_req)
+            for schema_version in (99, True, "1"):
+                with (
+                    self.subTest(generation_schema_version=schema_version),
+                    self.assertRaisesRegex(ValueError, "schema_version must be 1"),
+                ):
+                    validate_notebook_generation_request(
+                        dict(gen_req, schema_version=schema_version)
+                    )
 
             receipt = {
                 "schema_version": 0,
@@ -720,6 +730,16 @@ class NotebookWorkerContractTests(unittest.TestCase):
                     invalid = dict(base_gen_req, request_token=bad_token)
                     with self.assertRaisesRegex(ValueError, "request_token"):
                         validate_notebook_generation_request(invalid)
+
+    def test_legacy_worker_request_reports_missing_notebook_fields(self):
+        from workflow_automation.notebook import write_worker_request
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with self.assertRaisesRegex(
+                ValueError, "missing required NotebookLM fields: notebook_url, artifact_title"
+            ):
+                write_worker_request(root / "request.json", {"id": "STR-001"}, root)
 
     def test_receipt_identity_verification_in_handoff_and_ingestion(self):
         from workflow_automation.handoff import handoff_notebooklm_video

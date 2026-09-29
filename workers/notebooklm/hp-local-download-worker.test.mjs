@@ -5,11 +5,32 @@ import path from 'node:path';
 import test from 'node:test';
 
 import {
+  atomicJson,
   publishVerifiedDownload,
   validate,
   validateNotebookUrl,
   verifyExistingReceipt,
 } from './hp-local-download-worker.mjs';
+
+test('download receipt publication rejects a symlink destination', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'notebooklm-download-'));
+  const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'notebooklm-outside-'));
+  try {
+    const destination = path.join(root, 'receipt.json');
+    const outsideFile = path.join(outside, 'outside.json');
+    await fs.writeFile(outsideFile, 'preserve');
+    await fs.symlink(outsideFile, destination);
+
+    await assert.rejects(
+      () => atomicJson(destination, { status: 'done' }, root),
+      /receipt_path must not be a symlink/,
+    );
+    assert.equal(await fs.readFile(outsideFile, 'utf8'), 'preserve');
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+    await fs.rm(outside, { recursive: true, force: true });
+  }
+});
 
 test('download worker validateNotebookUrl accepts valid NotebookLM URLs', () => {
   assert.equal(

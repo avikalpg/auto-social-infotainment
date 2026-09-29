@@ -34,6 +34,11 @@ def mark_done(state: StoryState, stage: str, verification: dict[str, object]) ->
     rec.verification = verification
 
 
+def stage_satisfies_prerequisite(state: StoryState, stage: str, dry_run: bool) -> bool:
+    status = state.stages[stage].status
+    return status == "done" or (dry_run and status == "dry_run")
+
+
 def run_stage(state: StoryState, stage: str, cfg: Config, dry_run: bool = False) -> None:
     rec = state.stages[stage]
     if rec.status == "done":
@@ -103,7 +108,7 @@ def _execute_stage(state: StoryState, stage: str, cfg: Config, dry_run: bool = F
         mark_done(state, stage, result)
         return
     if stage == "video_produced":
-        if state.stages["video_queued"].status != "done":
+        if not stage_satisfies_prerequisite(state, "video_queued", dry_run):
             raise RuntimeError("NotebookLM generation must be queued before video download")
         # NotebookLM rule: only an HP-local Playwright worker may touch NotebookLM/downloads;
         # Azure-side code never downloads audio/video and must preserve audio bytes byte-for-byte.

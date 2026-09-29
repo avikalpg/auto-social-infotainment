@@ -1,13 +1,13 @@
 import json
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from workflow_automation.cli import _hydrate_notebook_source, resume
+from workflow_automation.cli import _hydrate_notebook_source, approve_candidate_pairs, resume
 from workflow_automation.media import verify_audio_hash
 from workflow_automation.state import StateStore, StoryState
 from workflow_automation.tracker import find_source, find_story, select_next_story
@@ -136,6 +136,41 @@ class StateTrackerTests(unittest.TestCase):
             failed = store.load(state.story_id)
             self.assertEqual(failed.stages["extracted"].status, "failed")
             self.assertEqual(failed.stages["extracted"].error, "boom")
+
+    def test_resume_advances_past_dry_run_stages_during_dry_run(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            store = StateStore(root / "state")
+            state = StoryState("story-dry-run")
+            state.stages["extracted"].status = "dry_run"
+            state.stages["video_queued"].status = "dry_run"
+            store.save(state)
+            cfg = SimpleNamespace(state_dir=store.state_dir)
+            args = SimpleNamespace(story_id=state.story_id, dry_run=True)
+
+            with patch("workflow_automation.cli.command_stage", return_value=0) as command:
+                self.assertEqual(resume(args, cfg), 0)
+
+            self.assertEqual(args.command, "produce-video")
+            command.assert_called_once_with(args, cfg)
+
+    def test_approve_candidate_pairs_validates_config_before_mutating(self):
+        from workflow_automation.errors import ExitCode
+
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            cfg = SimpleNamespace(
+                state_dir=root / "state",
+                validate=lambda: ["stories_path is invalid"],
+            )
+            args = SimpleNamespace(source_id="SRC-001")
+
+            with redirect_stderr(StringIO()), patch(
+                "workflow_automation.cli.StateStore"
+            ) as state_store:
+                self.assertEqual(approve_candidate_pairs(args, cfg), ExitCode.CONFIG)
+
+            state_store.assert_not_called()
 
     def test_load_or_create_hydrates_existing_state(self):
         from workflow_automation.cli import load_or_create

@@ -101,7 +101,11 @@ def _validate_http_url(value: Any, field: str) -> None:
 
 
 def validate_notebook_generation_request(data: dict[str, Any]) -> None:
-    if "schema_version" in data and data["schema_version"] != 1:
+    if "schema_version" in data and (
+        isinstance(data["schema_version"], bool)
+        or not isinstance(data["schema_version"], int)
+        or data["schema_version"] != 1
+    ):
         raise ValueError("notebook generation request schema_version must be 1")
     allowed = {
         "schema_version",
@@ -235,7 +239,11 @@ def validate_notebook_generation_receipt(data: dict[str, Any]) -> None:
 
 
 def validate_notebook_request(data: dict[str, Any]) -> None:
-    if "schema_version" in data and data["schema_version"] != 1:
+    if "schema_version" in data and (
+        isinstance(data["schema_version"], bool)
+        or not isinstance(data["schema_version"], int)
+        or data["schema_version"] != 1
+    ):
         raise ValueError("notebook download request schema_version must be 1")
     allowed = {
         "schema_version",

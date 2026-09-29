@@ -164,7 +164,8 @@ class CaptionWorkflowTests(unittest.TestCase):
                     "artifact_title": "Test Title",
                 },
             )
-            state.stages["video_queued"].status = "done"
+            # A dry-run queue stage is sufficient only for downstream dry-run planning.
+            state.stages["video_queued"].status = "dry_run"
 
             run_stage(state, "video_produced", cfg, dry_run=True)
 
@@ -303,6 +304,10 @@ class CaptionWorkflowTests(unittest.TestCase):
         cfg = SimpleNamespace(max_retries=3)
         with self.assertRaisesRegex(RuntimeError, "must be queued"):
             run_stage(state, "video_produced", cfg, dry_run=True)
+
+        state.stages["video_queued"].status = "dry_run"
+        with self.assertRaisesRegex(RuntimeError, "must be queued"):
+            run_stage(state, "video_produced", cfg, dry_run=False)
 
     def test_caption_contract_rejects_non_string_fields_and_boolean_schema(self):
         with tempfile.TemporaryDirectory() as temporary:

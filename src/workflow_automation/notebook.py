@@ -163,6 +163,16 @@ def ingest_download_receipt(
 
 # Backward-compatible aliases intentionally now enforce the new download contract.
 def write_worker_request(path: Path, story: dict[str, Any], output_dir: Path) -> dict[str, Any]:
+    required = ("id", "notebook_url", "artifact_title")
+    missing = [
+        key
+        for key in required
+        if not isinstance(story.get(key), str) or not str(story[key]).strip()
+    ]
+    if missing:
+        raise ValueError(
+            "story is missing required NotebookLM fields: " + ", ".join(missing)
+        )
     return write_download_request(
         path,
         request_id=f"notebook-{story['id']}",

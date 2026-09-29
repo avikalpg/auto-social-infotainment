@@ -117,7 +117,7 @@ test('receipt is atomically written with generation-only queue evidence', async 
       already_queued: false,
       generation_state: 'generating',
     });
-    await writeAtomicJson(req.receipt_path, receipt);
+    await writeAtomicJson(req.receipt_path, receipt, req.allow_root);
     const saved = JSON.parse(await fs.readFile(req.receipt_path, 'utf8'));
     assert.equal(saved.status, 'queued');
     assert.equal(saved.video_format, 'Short');
@@ -125,6 +125,28 @@ test('receipt is atomically written with generation-only queue evidence', async 
     assert.equal(await fs.readdir(path.dirname(req.receipt_path)).then((files) => files.some((file) => file.endsWith('.tmp'))), false);
   } finally {
     await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test('atomic receipt publication rejects a symlink destination', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'notebooklm-generation-'));
+  const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'notebooklm-outside-'));
+  try {
+    const receiptDirectory = path.join(root, 'receipts');
+    await fs.mkdir(receiptDirectory);
+    const destination = path.join(receiptDirectory, 'request-1.json');
+    const outsideFile = path.join(outside, 'outside.json');
+    await fs.writeFile(outsideFile, 'preserve');
+    await fs.symlink(outsideFile, destination);
+
+    await assert.rejects(
+      () => writeAtomicJson(destination, { status: 'queued' }, root),
+      /receipt_path must not be a symlink/,
+    );
+    assert.equal(await fs.readFile(outsideFile, 'utf8'), 'preserve');
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+    await fs.rm(outside, { recursive: true, force: true });
   }
 });
 

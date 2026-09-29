@@ -12,7 +12,7 @@ from .errors import ExitCode
 from .extraction import approve_candidates, extract_candidates
 from .jsonlog import configure
 from .lock import FileLock, LockError
-from .runner import run_stage
+from .runner import run_stage, stage_satisfies_prerequisite
 from .state import STAGES, StateStore, StoryState, utcnow
 from .tracker import find_source, find_story, select_next_story, story_id
 
@@ -137,6 +137,10 @@ def extract_candidate_pairs(args: argparse.Namespace, cfg: Config) -> int:
 
 
 def approve_candidate_pairs(args: argparse.Namespace, cfg: Config) -> int:
+    errors = cfg.validate()
+    if errors:
+        print(json.dumps({"errors": errors}), file=sys.stderr)
+        return ExitCode.CONFIG
     store = StateStore(cfg.state_dir / "sources")
     state_id = f"source--{args.source_id}"
     from .state import SourceState
@@ -180,7 +184,7 @@ def resume(args: argparse.Namespace, cfg: Config) -> int:
     store = StateStore(cfg.state_dir)
     st = load_or_create(store, cfg, args.story_id)
     for stage in STAGES:
-        if st.stages[stage].status != "done":
+        if not stage_satisfies_prerequisite(st, stage, args.dry_run):
             if stage == "extracted":
                 errors = cfg.validate()
                 if errors:
@@ -219,7 +223,8 @@ def resume(args: argparse.Namespace, cfg: Config) -> int:
             args.command = next(k for k, v in CMD_STAGE.items() if v == stage)
             args.story_id = st.story_id
             return command_stage(args, cfg)
-    print(json.dumps({"story_id": st.story_id, "status": "complete"}))
+    completion_status = "dry_run_complete" if args.dry_run else "complete"
+    print(json.dumps({"story_id": st.story_id, "status": completion_status}))
     return 0
 
 

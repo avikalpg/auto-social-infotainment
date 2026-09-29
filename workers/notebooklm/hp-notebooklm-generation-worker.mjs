@@ -7,6 +7,7 @@
  * never downloads an artifact.
  */
 import fs from 'node:fs/promises';
+import { constants as fsConstants } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -77,7 +78,15 @@ export async function assertRealContained(destination, allowRoot) {
     }
   }
   const realParent = await fs.realpath(path.dirname(lexicalDestination));
-  return path.join(realParent, path.basename(lexicalDestination));
+  const resolvedDestination = path.join(realParent, path.basename(lexicalDestination));
+  try {
+    if ((await fs.lstat(resolvedDestination)).isSymbolicLink()) {
+      throw new Error('receipt_path must not be a symlink');
+    }
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error;
+  }
+  return resolvedDestination;
 }
 
 export function validateNotebookUrl(value) {
@@ -166,11 +175,36 @@ export function validateRequest(raw) {
   };
 }
 
-export async function writeAtomicJson(destination, data) {
-  const directory = path.dirname(destination);
-  await fs.mkdir(directory, { recursive: true });
-  const temporary = path.join(
+export async function writeAtomicJson(destination, data, allowRoot) {
+  // Revalidate immediately before publication, then pin the checked directory.
+  // Using /proc/self/fd prevents a renamed or symlink-swapped parent from redirecting
+  // the temporary file or final rename outside the trusted root.
+  const validatedDestination = await assertRealContained(destination, allowRoot);
+  const directory = path.dirname(validatedDestination);
+  const directoryHandle = await fs.open(
     directory,
+    fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW,
+  );
+  const pinnedDirectory = `/proc/self/fd/${directoryHandle.fd}`;
+  const realRoot = await fs.realpath(path.resolve(allowRoot));
+  const pinnedRealDirectory = await fs.realpath(pinnedDirectory);
+  if (!isWithin(pinnedRealDirectory, realRoot)) {
+    await directoryHandle.close();
+    throw new Error('receipt_path parent moved outside configured allow_root');
+  }
+  const pinnedDestination = path.join(pinnedDirectory, path.basename(validatedDestination));
+  try {
+    if ((await fs.lstat(pinnedDestination)).isSymbolicLink()) {
+      throw new Error('receipt_path must not be a symlink');
+    }
+  } catch (error) {
+    if (error?.code !== 'ENOENT') {
+      await directoryHandle.close();
+      throw error;
+    }
+  }
+  const temporary = path.join(
+    pinnedDirectory,
     `.${path.basename(destination)}.${process.pid}.${Date.now()}.tmp`,
   );
   let handle;
@@ -180,16 +214,12 @@ export async function writeAtomicJson(destination, data) {
     await handle.sync();
     await handle.close();
     handle = undefined;
-    await fs.rename(temporary, destination);
-    const directoryHandle = await fs.open(directory, 'r');
-    try {
-      await directoryHandle.sync();
-    } finally {
-      await directoryHandle.close();
-    }
+    await fs.rename(temporary, pinnedDestination);
+    await directoryHandle.sync();
   } finally {
     await handle?.close().catch(() => {});
     await fs.unlink(temporary).catch(() => {});
+    await directoryHandle.close().catch(() => {});
   }
 }
 
@@ -382,7 +412,7 @@ async function main() {
           generation_state: existingState,
           confirmation: 'matching request is already visibly queued or generating',
         });
-        await writeAtomicJson(request.receipt_path, receipt);
+        await writeAtomicJson(request.receipt_path, receipt, request.allow_root);
         console.log(JSON.stringify(receipt));
         return;
       }
@@ -401,14 +431,14 @@ async function main() {
         generation_state: confirmation.state,
         confirmation: confirmation.confirmation_text,
       });
-      await writeAtomicJson(request.receipt_path, receipt);
+      await writeAtomicJson(request.receipt_path, receipt, request.allow_root);
       console.log(JSON.stringify(receipt));
     } finally {
       await browser.disconnect();
     }
   } catch (error) {
     const receipt = buildReceipt(request, 'error', baseEvidence, error);
-    await writeAtomicJson(request.receipt_path, receipt);
+    await writeAtomicJson(request.receipt_path, receipt, request.allow_root);
     throw error;
   }
 }

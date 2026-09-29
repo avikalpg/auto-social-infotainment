@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs/promises';
+import { constants as fsConstants } from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
@@ -37,10 +38,20 @@ async function safePath(candidate, root, field) {
  try { if((await fs.lstat(lexical)).isSymbolicLink()) fail(`${field} must not be a symlink`); } catch(e) { if(e?.code!=='ENOENT') throw e; }
  return path.join(realParent,path.basename(lexical));
 }
-async function atomicJson(file, value) {
- const dir=path.dirname(file); await fs.mkdir(dir,{recursive:true}); const tmp=path.join(dir,`.${path.basename(file)}.${process.pid}.${Date.now()}.tmp`); let handle;
- try { handle=await fs.open(tmp,'wx',0o600); await handle.writeFile(JSON.stringify(value,null,2)+'\n'); await handle.sync(); await handle.close(); handle=undefined; await fs.rename(tmp,file); const dirHandle=await fs.open(dir,'r'); try { await dirHandle.sync(); } finally { await dirHandle.close(); } }
- finally { await handle?.close().catch(()=>{}); await fs.unlink(tmp).catch(()=>{}); }
+export async function atomicJson(file, value, allowRoot) {
+ const validated=await safePath(file,allowRoot,'receipt_path');
+ const dir=path.dirname(validated);
+ const dirHandle=await fs.open(dir,fsConstants.O_RDONLY|fsConstants.O_DIRECTORY|fsConstants.O_NOFOLLOW);
+ const pinnedDir=`/proc/self/fd/${dirHandle.fd}`;
+ const realRoot=await fs.realpath(path.resolve(allowRoot));
+ const pinnedRealDir=await fs.realpath(pinnedDir);
+ if(!inside(pinnedRealDir,realRoot)){await dirHandle.close();fail('receipt_path parent moved outside configured allow_root');}
+ const pinnedFile=path.join(pinnedDir,path.basename(validated));
+ try { if((await fs.lstat(pinnedFile)).isSymbolicLink())fail('receipt_path must not be a symlink'); }
+ catch(e) { if(e?.code!=='ENOENT'){await dirHandle.close();throw e;} }
+ const tmp=path.join(pinnedDir,`.${path.basename(file)}.${process.pid}.${Date.now()}.tmp`); let handle;
+ try { handle=await fs.open(tmp,'wx',0o600); await handle.writeFile(JSON.stringify(value,null,2)+'\n'); await handle.sync(); await handle.close(); handle=undefined; await fs.rename(tmp,pinnedFile); await dirHandle.sync(); }
+ finally { await handle?.close().catch(()=>{}); await fs.unlink(tmp).catch(()=>{}); await dirHandle.close().catch(()=>{}); }
 }
 export async function publishVerifiedDownload(temporary, destination) {
  const handle=await fs.open(temporary,'r');
@@ -131,7 +142,7 @@ async function main(){
      artifact: a,
      evidence: { ...priorReceipt.evidence, idempotent_existing: true, artifact_title: req.artifact_title, local_worker: true }
    };
-   await atomicJson(receipt, r);
+   await atomicJson(receipt, r, req.allow_root);
    console.log(JSON.stringify(r));
    return;
  }
@@ -154,7 +165,7 @@ async function main(){
     verifyExpected(a,req);
     await publishVerifiedDownload(temporary,req.output_path);
     const r={schema_version:1,request_id:req.request_id,story_id:req.story_id,...(req.request_token?{request_token:req.request_token}:{}),status:'done',notebook_url:req.notebook_url,...(req.expected_format?{video_format:req.expected_format}:{}),output_path:req.output_path,allow_root:req.allow_root,timestamp:new Date().toISOString(),artifact:a,evidence:{idempotent_existing:false,artifact_title:req.artifact_title,suggested_filename:download.suggestedFilename(),selector_attempts:attempt,download_failure:null,local_worker:true}};
-    await atomicJson(receipt,r);
+    await atomicJson(receipt,r,req.allow_root);
     console.log(JSON.stringify(r));
     return;
    }catch(e){

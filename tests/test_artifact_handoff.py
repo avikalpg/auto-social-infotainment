@@ -230,6 +230,19 @@ class ArtifactHandoffTests(unittest.TestCase):
                 )
             self.assertEqual(outside_target.read_bytes(), b"do not replace")
 
+            destination = handoff_root / "notebooklm-original.mp4"
+            destination.unlink()
+            destination.write_bytes(b"concurrent result")
+            with self.assertRaisesRegex(FileExistsError, "destination already exists"):
+                handoff_notebooklm_video(
+                    receipt_path,
+                    allowed_output_root=output_root,
+                    handoff_root=handoff_root,
+                    allowed_handoff_root=allowed_handoff_root,
+                    ffprobe_bin=FFPROBE,
+                )
+            self.assertEqual(destination.read_bytes(), b"concurrent result")
+
     def test_end_to_end_video_produced_stage_regression(self):
         """End-to-end regression verifying that handoff, outro append, and packaging succeed
 

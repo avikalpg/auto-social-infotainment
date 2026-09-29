@@ -141,6 +141,9 @@ def _atomic_copy_to_directory(
             raise ValueError(
                 f"handoff destination is not a regular file: {directory / destination_name}"
             )
+        raise FileExistsError(
+            f"handoff destination already exists: {directory / destination_name}"
+        )
 
     temporary_name = _temporary_name(destination_name)
     fd = os.open(
@@ -154,12 +157,17 @@ def _atomic_copy_to_directory(
             shutil.copyfileobj(reader, writer, length=1024 * 1024)
             writer.flush()
             os.fsync(writer.fileno())
-        os.replace(
+        # Publish without replacing a result that another handoff created after
+        # the existence check above. A hard link is atomic and fails with
+        # EEXIST if the destination appeared concurrently.
+        os.link(
             temporary_name,
             destination_name,
             src_dir_fd=directory_fd,
             dst_dir_fd=directory_fd,
+            follow_symlinks=False,
         )
+        os.unlink(temporary_name, dir_fd=directory_fd)
         os.fsync(directory_fd)
         return directory / destination_name
     except Exception:

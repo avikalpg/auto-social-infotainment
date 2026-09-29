@@ -145,8 +145,8 @@ class CaptionWorkflowTests(unittest.TestCase):
             content_root.mkdir()
 
             cfg = SimpleNamespace(
-                notebooklm_worker_cmd=("true",),
-                caption_generator_cmd=("echo", "caption"),
+                notebooklm_worker_cmd=None,
+                caption_generator_cmd=None,
                 branded_outro_path=root / "outro.mp4",
                 notebooklm_output_root=output_root,
                 notebooklm_request_dir=req_dir,
@@ -175,7 +175,9 @@ class CaptionWorkflowTests(unittest.TestCase):
             self.assertIn("planned", verification)
             self.assertIn("caption", verification["planned"])
             self.assertIn("content_package", verification["planned"])
+            self.assertIsNone(verification["command"])
             self.assertTrue(verification["planned"]["caption"]["generator"]["dry_run"])
+            self.assertIsNone(verification["planned"]["caption"]["generator"]["command"])
 
 
     def test_video_queued_runs_generation_worker_and_validates_receipt(self):

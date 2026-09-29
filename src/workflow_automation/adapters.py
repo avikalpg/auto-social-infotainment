@@ -14,11 +14,14 @@ class CommandAdapter:
     cmd: tuple[str, ...] | None
 
     def run(self, args: list[str], dry_run: bool = False) -> dict[str, object]:
+        if dry_run:
+            return {
+                "dry_run": True,
+                "command": [*self.cmd, *args] if self.cmd else None,
+            }
         if not self.cmd:
             raise AdapterNotConfigured(f"{self.name} adapter command is not configured")
         full = [*self.cmd, *args]
-        if dry_run:
-            return {"dry_run": True, "command": full}
         proc = subprocess.run(full, text=True, capture_output=True, check=False)
         if proc.returncode != 0:
             raise RuntimeError(f"{self.name} failed rc={proc.returncode}: {proc.stderr.strip()}")

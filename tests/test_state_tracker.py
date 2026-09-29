@@ -154,6 +154,20 @@ class StateTrackerTests(unittest.TestCase):
             self.assertEqual(args.command, "produce-video")
             command.assert_called_once_with(args, cfg)
 
+    def test_publication_dry_run_does_not_require_adapter(self):
+        from workflow_automation.runner import run_stage
+
+        cfg = SimpleNamespace(instagram_cmd=None, max_retries=3)
+        state = StoryState("story-001")
+
+        run_stage(state, "instagram_published", cfg, dry_run=True)
+
+        self.assertEqual(state.stages["instagram_published"].status, "dry_run")
+        self.assertEqual(
+            state.stages["instagram_published"].verification,
+            {"dry_run": True, "command": None},
+        )
+
     def test_approve_candidate_pairs_validates_config_before_mutating(self):
         from workflow_automation.errors import ExitCode
 

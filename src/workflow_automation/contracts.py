@@ -414,7 +414,10 @@ def validate_notebook_receipt(data: dict[str, Any], *, allow_root: Path | str) -
     if isinstance(dimensions, dict):
         reject_unsupported_keys(dimensions, {"width", "height"}, "notebook artifact dimensions")
     if not isinstance(dimensions, dict) or not all(
-        isinstance(dimensions.get(k), int) and dimensions[k] > 0 for k in ("width", "height")
+        isinstance(dimensions.get(k), int)
+        and not isinstance(dimensions[k], bool)
+        and dimensions[k] > 0
+        for k in ("width", "height")
     ):
         raise ValueError("notebook artifact dimensions must contain positive width and height")
     codecs = artifact["codecs"]

@@ -276,6 +276,12 @@ class NotebookWorkerContractTests(unittest.TestCase):
                     artifact = dict(receipt["artifact"], **{key: value})
                     with self.assertRaisesRegex(ValueError, key):
                         validate_notebook_receipt(dict(receipt, artifact=artifact), allow_root=root)
+            for key in ("width", "height"):
+                with self.subTest(dimension=key):
+                    dimensions = dict(receipt["artifact"]["dimensions"], **{key: True})
+                    artifact = dict(receipt["artifact"], dimensions=dimensions)
+                    with self.assertRaisesRegex(ValueError, "dimensions"):
+                        validate_notebook_receipt(dict(receipt, artifact=artifact), allow_root=root)
 
     def test_python_contract_requires_non_empty_string_types(self):
         from workflow_automation.contracts import validate_notebook_request

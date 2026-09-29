@@ -83,7 +83,7 @@ test('matching queue detection requires both artifact title and unique request t
   };
   // Matches when both title and request token are present
   assert.equal(
-    matchingQueueState('Video overview Disputed Decision (ref: STR-001) is generating.', req),
+    matchingQueueState('Video overview Disputed Decision [ref:STR-001] is generating.', req),
     'generating'
   );
   assert.equal(
@@ -103,6 +103,15 @@ test('matching queue detection requires both artifact title and unique request t
   // Rejects unrelated generations
   assert.equal(
     matchingQueueState('Another video is generating.', req),
+    null
+  );
+  // Rejects prefix collisions for both the unique token and artifact title.
+  assert.equal(
+    matchingQueueState('Disputed Decision [ref:STR-0010] is queued.', req),
+    null
+  );
+  assert.equal(
+    matchingQueueState('Disputed Decisions [ref:STR-001] is queued.', req),
     null
   );
 });

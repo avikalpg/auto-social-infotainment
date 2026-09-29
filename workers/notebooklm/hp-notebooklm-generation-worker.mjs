@@ -227,6 +227,10 @@ function normalizeText(value) {
   return String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 export function formatPromptWithToken(prompt, token) {
   const trimmedPrompt = String(prompt || '').trim();
   const trimmedToken = String(token || '').trim();
@@ -243,9 +247,14 @@ export function matchingQueueState(visibleText, request) {
   const token = normalizeText(request.request_token || request.story_id);
   if (!token || !title) return null;
 
-  // Strong request identity: requires both the artifact title and the unique request/story token
-  // to be visibly present in the queue state text.
-  const hasRequestIdentity = text.includes(title) && text.includes(token);
+  // Require the exact marker that formatPromptWithToken() submits. Bound the title too,
+  // so identifiers and titles that prefix another request cannot produce a match.
+  const tokenPattern = new RegExp(`\\[ref:\\s*${escapeRegExp(token)}\\]`, 'i');
+  const titlePattern = new RegExp(
+    `(?:^|[^a-z0-9])${escapeRegExp(title)}(?:$|[^a-z0-9])`,
+    'i',
+  );
+  const hasRequestIdentity = titlePattern.test(text) && tokenPattern.test(text);
   if (!hasRequestIdentity) return null;
   if (/\b(generating|creating|preparing|in progress)\b/.test(text)) return 'generating';
   if (/\b(queued|queueing|waiting in queue|pending)\b/.test(text)) return 'queued';

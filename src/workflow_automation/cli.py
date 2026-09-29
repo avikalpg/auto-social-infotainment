@@ -185,6 +185,18 @@ def resume(args: argparse.Namespace, cfg: Config) -> int:
     st = load_or_create(store, cfg, args.story_id)
     for stage in STAGES:
         if not stage_satisfies_prerequisite(st, stage, args.dry_run):
+            if args.dry_run and stage.endswith("_published"):
+                print(
+                    json.dumps(
+                        {
+                            "story_id": st.story_id,
+                            "status": "dry_run_complete",
+                            "next_stage": stage,
+                            "publication_simulated": False,
+                        }
+                    )
+                )
+                return ExitCode.OK
             if stage == "extracted":
                 errors = cfg.validate()
                 if errors:

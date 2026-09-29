@@ -154,6 +154,41 @@ class StateTrackerTests(unittest.TestCase):
             self.assertEqual(args.command, "produce-video")
             command.assert_called_once_with(args, cfg)
 
+    def test_resume_dry_run_stops_before_publication(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            store = StateStore(root / "state")
+            state = StoryState("story-dry-run")
+            state.stages["extracted"].status = "dry_run"
+            state.stages["video_queued"].status = "dry_run"
+            state.stages["video_produced"].status = "dry_run"
+            store.save(state)
+            cfg = SimpleNamespace(state_dir=store.state_dir)
+            args = SimpleNamespace(story_id=state.story_id, dry_run=True)
+
+            output = StringIO()
+            with redirect_stdout(output), patch(
+                "workflow_automation.cli.command_stage"
+            ) as command:
+                self.assertEqual(resume(args, cfg), 0)
+
+            result = json.loads(output.getvalue())
+            self.assertEqual(result["status"], "dry_run_complete")
+            self.assertEqual(result["next_stage"], "instagram_published")
+            self.assertFalse(result["publication_simulated"])
+            command.assert_not_called()
+
+            persisted = store.load(state.story_id)
+            for stage in (
+                "instagram_published",
+                "x_published",
+                "youtube_published",
+                "linkedin_published",
+            ):
+                self.assertEqual(persisted.stages[stage].status, "pending")
+                self.assertEqual(persisted.stages[stage].verification, {})
+            self.assertNotIn("package_dir", persisted.artifacts)
+
     def test_publication_dry_run_does_not_require_adapter(self):
         from workflow_automation.runner import run_stage
 

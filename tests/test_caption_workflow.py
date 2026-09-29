@@ -178,6 +178,7 @@ class CaptionWorkflowTests(unittest.TestCase):
             self.assertIsNone(verification["command"])
             self.assertTrue(verification["planned"]["caption"]["generator"]["dry_run"])
             self.assertIsNone(verification["planned"]["caption"]["generator"]["command"])
+            self.assertFalse((req_dir / "STR-011.request.json").exists())
 
 
     def test_video_queued_runs_generation_worker_and_validates_receipt(self):
@@ -225,6 +226,7 @@ class CaptionWorkflowTests(unittest.TestCase):
             self.assertEqual(state.stages["video_queued"].status, "dry_run")
             self.assertEqual(state.stages["video_queued"].attempts, 0)
             self.assertNotIn("generation_receipt_path", state.artifacts)
+            self.assertFalse((request_dir / "STR-012.generation.request.json").exists())
 
             run_stage(state, "video_queued", cfg)
 
@@ -266,6 +268,7 @@ class CaptionWorkflowTests(unittest.TestCase):
             self.assertIsNone(verification["command"])
             self.assertTrue(verification["dry_run"])
             self.assertIn("request", verification)
+            self.assertEqual(list(request_dir.iterdir()), [])
 
     def test_video_dry_runs_still_require_request_identity_metadata(self):
         from types import SimpleNamespace

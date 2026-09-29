@@ -14,8 +14,7 @@ from .packages import atomic_json
 from .state import utcnow
 
 
-def write_generation_request(
-    path: Path,
+def build_generation_request(
     *,
     request_id: str,
     story_id: str,
@@ -42,6 +41,33 @@ def write_generation_request(
     if cdp_url:
         request["cdp_url"] = cdp_url
     validate_notebook_generation_request(request)
+    return request
+
+
+def write_generation_request(
+    path: Path,
+    *,
+    request_id: str,
+    story_id: str,
+    request_token: str,
+    notebook_url: str,
+    artifact_title: str,
+    focus_prompt: str,
+    receipt_path: Path,
+    allow_root: Path,
+    cdp_url: str | None = None,
+) -> dict[str, Any]:
+    request = build_generation_request(
+        request_id=request_id,
+        story_id=story_id,
+        request_token=request_token,
+        notebook_url=notebook_url,
+        artifact_title=artifact_title,
+        focus_prompt=focus_prompt,
+        receipt_path=receipt_path,
+        allow_root=allow_root,
+        cdp_url=cdp_url,
+    )
     atomic_json(path, request)
     return request
 
@@ -70,8 +96,7 @@ def ingest_generation_receipt(
     return receipt
 
 
-def write_download_request(
-    path: Path,
+def build_download_request(
     *,
     request_id: str,
     story_id: str,
@@ -113,6 +138,41 @@ def write_download_request(
     if ffprobe_bin:
         req["ffprobe_bin"] = ffprobe_bin
     validate_notebook_request(req)
+    return req
+
+
+def write_download_request(
+    path: Path,
+    *,
+    request_id: str,
+    story_id: str,
+    notebook_url: str,
+    request_token: str | None = None,
+    artifact_title: str,
+    output_path: Path,
+    allow_root: Path,
+    receipt_path: Path | None = None,
+    expected_format: str | None = None,
+    expected_container: str | None = None,
+    expected_duration_seconds: float | None = None,
+    cdp_url: str | None = None,
+    ffprobe_bin: str | None = None,
+) -> dict[str, Any]:
+    req = build_download_request(
+        request_id=request_id,
+        story_id=story_id,
+        notebook_url=notebook_url,
+        request_token=request_token,
+        artifact_title=artifact_title,
+        output_path=output_path,
+        allow_root=allow_root,
+        receipt_path=receipt_path,
+        expected_format=expected_format,
+        expected_container=expected_container,
+        expected_duration_seconds=expected_duration_seconds,
+        cdp_url=cdp_url,
+        ffprobe_bin=ffprobe_bin,
+    )
     atomic_json(path, req)
     return req
 

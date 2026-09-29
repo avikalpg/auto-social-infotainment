@@ -8,6 +8,8 @@ from .config import Config
 from .handoff import handoff_notebooklm_video
 from .media import append_branded_outro_preserve_audio, verify_audio_hash
 from .notebook import (
+    build_download_request,
+    build_generation_request,
     ingest_download_receipt,
     ingest_generation_receipt,
     write_download_request,
@@ -76,18 +78,21 @@ def _execute_stage(state: StoryState, stage: str, cfg: Config, dry_run: bool = F
         request_token = str(src.get("request_token") or request_id)
         request_path = cfg.notebooklm_request_dir / f"{state.story_id}.generation.request.json"
         receipt_path = cfg.notebooklm_request_dir / f"{state.story_id}.generation.receipt.json"
-        request = write_generation_request(
-            request_path,
-            request_id=request_id,
-            story_id=state.story_id,
-            request_token=request_token,
-            notebook_url=str(src["notebook_url"]),
-            artifact_title=str(src["artifact_title"]),
-            focus_prompt=str(src["focus_prompt"]),
-            receipt_path=receipt_path,
-            allow_root=cfg.notebooklm_request_dir,
-            cdp_url=cfg.notebooklm_cdp_url,
-        )
+        generation_request = {
+            "request_id": request_id,
+            "story_id": state.story_id,
+            "request_token": request_token,
+            "notebook_url": str(src["notebook_url"]),
+            "artifact_title": str(src["artifact_title"]),
+            "focus_prompt": str(src["focus_prompt"]),
+            "receipt_path": receipt_path,
+            "allow_root": cfg.notebooklm_request_dir,
+            "cdp_url": cfg.notebooklm_cdp_url,
+        }
+        if dry_run:
+            request = build_generation_request(**generation_request)
+        else:
+            request = write_generation_request(request_path, **generation_request)
         if dry_run and not cfg.notebooklm_generation_worker_cmd:
             result: dict[str, object] = {"dry_run": True, "command": None}
         else:
@@ -156,26 +161,30 @@ def _execute_stage(state: StoryState, stage: str, cfg: Config, dry_run: bool = F
                 raise ValueError("queued generation video_format does not match download request")
             expected_format = generation_receipt["video_format"]
 
-        write_download_request(
-            req_path,
-            request_id=f"notebooklm-{state.story_id}",
-            story_id=state.story_id,
-            request_token=request_token,
-            notebook_url=str(src["notebook_url"]),
-            artifact_title=str(src["artifact_title"]),
-            output_path=Path(src.get("notebooklm_output_path") or out),
-            allow_root=cfg.notebooklm_output_root,
-            receipt_path=receipt_path,
-            expected_format=expected_format,
-            expected_container=src.get("expected_container"),
-            expected_duration_seconds=src.get("expected_duration_seconds"),
-            cdp_url=cfg.notebooklm_cdp_url,
-            ffprobe_bin=cfg.ffprobe_bin,
-        )
+        download_request = {
+            "request_id": f"notebooklm-{state.story_id}",
+            "story_id": state.story_id,
+            "request_token": request_token,
+            "notebook_url": str(src["notebook_url"]),
+            "artifact_title": str(src["artifact_title"]),
+            "output_path": Path(src.get("notebooklm_output_path") or out),
+            "allow_root": cfg.notebooklm_output_root,
+            "receipt_path": receipt_path,
+            "expected_format": expected_format,
+            "expected_container": src.get("expected_container"),
+            "expected_duration_seconds": src.get("expected_duration_seconds"),
+            "cdp_url": cfg.notebooklm_cdp_url,
+            "ffprobe_bin": cfg.ffprobe_bin,
+        }
+        if dry_run:
+            request = build_download_request(**download_request)
+        else:
+            request = write_download_request(req_path, **download_request)
 
         result = CommandAdapter(
             "HP-local NotebookLM Playwright worker", cfg.notebooklm_worker_cmd
         ).run([str(req_path)], dry_run)
+        result["request"] = request
         if not dry_run:
             expected_req_id = f"notebooklm-{state.story_id}"
             artifact = ingest_download_receipt(

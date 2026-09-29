@@ -24,7 +24,7 @@ Its request is strict JSON: `request_id`, `story_id`, `notebook_url` (an `https:
 
 The workflow integrates generation as the `video_queued` stage. `queue-video` writes the generation request, invokes `notebooklm_generation_worker_cmd`, validates the request-specific queued receipt, and persists that evidence. `produce-video` refuses to start the download stage until `video_queued` is done, so asynchronous NotebookLM generation remains an explicit resumable boundary. Stories must provide `notebook_url`, `artifact_title`, and `focus_prompt` before queueing.
 
-Dry runs do not require configured worker adapters or generated media, but they still validate and record the NotebookLM request identity. A story must therefore provide the required NotebookLM metadata even when simulating `queue-video` or `produce-video`.
+Dry runs do not require configured worker adapters or generated media, and they never write worker request files into production request directories. They still validate and record the NotebookLM request identity in stage verification. A story must therefore provide the required NotebookLM metadata even when simulating `queue-video` or `produce-video`. `resume --dry-run` stops before the first publication stage so its persisted state cannot look publication-ready; use an explicit `publish-* --dry-run` command to inspect an individual publisher plan.
 
 ```bash
 node workers/notebooklm/hp-notebooklm-generation-worker.mjs request.json

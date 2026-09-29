@@ -1,9 +1,11 @@
+import hashlib
 import json
 import shutil
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import Mock, patch
 
 from workflow_automation.handoff import handoff_notebooklm_video
 from workflow_automation.media import (
@@ -92,6 +94,34 @@ def make_silent_source_video(path: Path) -> None:
         ],
         check=True,
     )
+
+
+class CanonicalPcmHashTests(unittest.TestCase):
+    def test_hashes_ffmpeg_output_in_bounded_chunks(self):
+        chunks = [b"first chunk", b"second chunk"]
+
+        class ChunkedStdout:
+            def __init__(self):
+                self.read_sizes = []
+                self.closed = False
+
+            def read(self, size=-1):
+                self.read_sizes.append(size)
+                return chunks.pop(0) if chunks else b""
+
+            def close(self):
+                self.closed = True
+
+        stdout = ChunkedStdout()
+        proc = Mock(stdout=stdout)
+        proc.wait.return_value = 0
+
+        with patch("workflow_automation.media.subprocess.Popen", return_value=proc):
+            digest = canonical_pcm_sha256(Path("video.mp4"), "ffmpeg")
+
+        self.assertEqual(digest, hashlib.sha256(b"first chunksecond chunk").hexdigest())
+        self.assertEqual(stdout.read_sizes, [1024 * 1024] * 3)
+        self.assertTrue(stdout.closed)
 
 
 @unittest.skipUnless(FFMPEG and FFPROBE, "ffmpeg/ffprobe required for handoff integration test")

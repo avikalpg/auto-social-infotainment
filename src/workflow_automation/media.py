@@ -49,34 +49,52 @@ def ffprobe_validate(path: Path, ffprobe_bin: str = "ffprobe") -> dict[str, obje
 
 def canonical_pcm_sha256(path: Path, ffmpeg_bin: str = "ffmpeg") -> str:
     """Hash decoded audio as canonical PCM, independent of container/audio codec bytes."""
-    proc = subprocess.run(
-        [
-            ffmpeg_bin,
-            "-v",
-            "error",
-            "-i",
-            str(path),
-            "-map",
-            "0:a:0",
-            "-vn",
-            "-f",
-            "s16le",
-            "-acodec",
-            "pcm_s16le",
-            "-ac",
-            "2",
-            "-ar",
-            "48000",
-            "-",
-        ],
-        capture_output=True,
-        check=False,
-    )
-    if proc.returncode != 0:
-        raise RuntimeError(
-            f"ffmpeg audio extraction failed for {path}: {proc.stderr.decode(errors='replace').strip()}"
+    with tempfile.TemporaryFile() as stderr:
+        proc = subprocess.Popen(
+            [
+                ffmpeg_bin,
+                "-v",
+                "error",
+                "-i",
+                str(path),
+                "-map",
+                "0:a:0",
+                "-vn",
+                "-f",
+                "s16le",
+                "-acodec",
+                "pcm_s16le",
+                "-ac",
+                "2",
+                "-ar",
+                "48000",
+                "-",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=stderr,
         )
-    return hashlib.sha256(proc.stdout).hexdigest()
+        if proc.stdout is None:
+            proc.kill()
+            proc.wait()
+            raise RuntimeError("ffmpeg audio extraction stdout pipe was not created")
+
+        digest = hashlib.sha256()
+        try:
+            for chunk in iter(lambda: proc.stdout.read(1024 * 1024), b""):
+                digest.update(chunk)
+        except BaseException:
+            proc.kill()
+            proc.wait()
+            raise
+        finally:
+            proc.stdout.close()
+
+        returncode = proc.wait()
+        if returncode != 0:
+            stderr.seek(0)
+            message = stderr.read().decode(errors="replace").strip()
+            raise RuntimeError(f"ffmpeg audio extraction failed for {path}: {message}")
+    return digest.hexdigest()
 
 
 def verify_canonical_pcm_equal(

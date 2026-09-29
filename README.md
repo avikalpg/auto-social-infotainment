@@ -24,6 +24,8 @@ Its request is strict JSON: `request_id`, `story_id`, `notebook_url` (an `https:
 
 The workflow integrates generation as the `video_queued` stage. `queue-video` writes the generation request, invokes `notebooklm_generation_worker_cmd`, validates the request-specific queued receipt, and persists that evidence. `produce-video` refuses to start the download stage until `video_queued` is done, so asynchronous NotebookLM generation remains an explicit resumable boundary. Stories must provide `notebook_url`, `artifact_title`, and `focus_prompt` before queueing.
 
+Dry runs do not require configured worker adapters or generated media, but they still validate and record the NotebookLM request identity. A story must therefore provide the required NotebookLM metadata even when simulating `queue-video` or `produce-video`.
+
 ```bash
 node workers/notebooklm/hp-notebooklm-generation-worker.mjs request.json
 ```
@@ -77,7 +79,7 @@ Key commands:
 - `workflow-automation approve-candidate-pairs --source-id <id>`: explicit human approval gate. Atomically appends new approved `main_character` + `primary_tension` pairs to the configured stories tracker and is idempotent by source/pair.
 - Publisher completion requires a receipt containing `platform`, `status: published`, `public_url`, `timestamp`, and `verification_evidence` before a package status can mark that platform published.
 
-Notebook worker contracts are JSON request/receipt files. Download receipts must be `done` and include `output_path`, verified `artifact` media metadata (`size_bytes`, `container`, `duration_seconds`, `dimensions`, `codecs`, `sha256`), and execution `evidence`:
+Notebook worker contracts are JSON request/receipt files. Download requests require an absolute `receipt_path` contained by their trusted `allow_root`; the worker never derives or mutates that destination. Download receipts must be `done` and include `output_path`, verified `artifact` media metadata (`size_bytes`, `container`, `duration_seconds`, `dimensions`, `codecs`, `sha256`), and execution `evidence`:
 
 ```json
 {

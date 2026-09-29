@@ -88,9 +88,12 @@ def _execute_stage(state: StoryState, stage: str, cfg: Config, dry_run: bool = F
             allow_root=cfg.notebooklm_request_dir,
             cdp_url=cfg.notebooklm_cdp_url,
         )
-        result = CommandAdapter(
-            "HP-local NotebookLM generation worker", cfg.notebooklm_generation_worker_cmd
-        ).run([str(request_path)], dry_run)
+        if dry_run and not cfg.notebooklm_generation_worker_cmd:
+            result: dict[str, object] = {"dry_run": True, "command": None}
+        else:
+            result = CommandAdapter(
+                "HP-local NotebookLM generation worker", cfg.notebooklm_generation_worker_cmd
+            ).run([str(request_path)], dry_run)
         result["request"] = request
         if not dry_run:
             receipt = ingest_generation_receipt(

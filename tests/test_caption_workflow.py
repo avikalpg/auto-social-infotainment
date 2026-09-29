@@ -234,6 +234,53 @@ class CaptionWorkflowTests(unittest.TestCase):
             self.assertEqual(request["focus_prompt"], "Focus on the disputed decision.")
             self.assertIn("receipt", state.stages["video_queued"].verification)
 
+    def test_video_queued_dry_run_does_not_require_generation_adapter(self):
+        from types import SimpleNamespace
+
+        from workflow_automation.runner import run_stage
+        from workflow_automation.state import StoryState
+
+        with tempfile.TemporaryDirectory() as temporary:
+            request_dir = Path(temporary)
+            cfg = SimpleNamespace(
+                notebooklm_generation_worker_cmd=None,
+                notebooklm_request_dir=request_dir,
+                notebooklm_cdp_url=None,
+                max_retries=3,
+            )
+            state = StoryState(
+                "STR-015",
+                source={
+                    "notebook_url": "https://notebook.google.com/notebook/test-1",
+                    "artifact_title": "STR-015 overview",
+                    "focus_prompt": "Focus on the disputed decision.",
+                },
+            )
+
+            run_stage(state, "video_queued", cfg, dry_run=True)
+
+            verification = state.stages["video_queued"].verification
+            self.assertEqual(state.stages["video_queued"].status, "dry_run")
+            self.assertIsNone(verification["command"])
+            self.assertTrue(verification["dry_run"])
+            self.assertIn("request", verification)
+
+    def test_video_dry_runs_still_require_request_identity_metadata(self):
+        from types import SimpleNamespace
+
+        from workflow_automation.runner import run_stage
+        from workflow_automation.state import StoryState
+
+        cfg = SimpleNamespace(max_retries=3)
+        queued = StoryState("STR-016")
+        with self.assertRaisesRegex(RuntimeError, "missing NotebookLM fields"):
+            run_stage(queued, "video_queued", cfg, dry_run=True)
+
+        produced = StoryState("STR-017")
+        produced.stages["video_queued"].status = "dry_run"
+        with self.assertRaisesRegex(RuntimeError, "missing NotebookLM fields"):
+            run_stage(produced, "video_produced", cfg, dry_run=True)
+
     def test_video_produced_rejects_story_identity_changed_after_queueing(self):
         from types import SimpleNamespace
 

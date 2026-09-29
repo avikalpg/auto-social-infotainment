@@ -167,7 +167,9 @@ def validate_notebook_generation_receipt(data: dict[str, Any]) -> None:
     }
     reject_unsupported_keys(data, allowed, "notebook generation receipt")
     if "schema_version" in data and (
-        isinstance(data["schema_version"], bool) or data["schema_version"] != 1
+        isinstance(data["schema_version"], bool)
+        or not isinstance(data["schema_version"], int)
+        or data["schema_version"] != 1
     ):
         raise ValueError("notebook generation receipt schema_version must be 1")
     require_keys(
@@ -268,6 +270,7 @@ def validate_notebook_request(data: dict[str, Any]) -> None:
         "notebook_url",
         "artifact_title",
         "output_path",
+        "receipt_path",
         "allow_root",
     ):
         val = data.get(key)
@@ -340,7 +343,9 @@ def validate_notebook_receipt(data: dict[str, Any], *, allow_root: Path | str) -
         "notebook download receipt",
     )
     if "schema_version" in data and (
-        isinstance(data["schema_version"], bool) or data["schema_version"] != 1
+        isinstance(data["schema_version"], bool)
+        or not isinstance(data["schema_version"], int)
+        or data["schema_version"] != 1
     ):
         raise ValueError("notebook download receipt schema_version must be 1")
     require_keys(

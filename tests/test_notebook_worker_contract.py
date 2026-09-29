@@ -84,6 +84,7 @@ class NotebookWorkerContractTests(unittest.TestCase):
                     "notebook_url": "https://notebook.google.com/notebook/example",
                     "artifact_title": "Generic Artifact",
                     "output_path": str(root / "allowed" / "out.mp4"),
+                    "receipt_path": str(root / "allowed" / "receipt.json"),
                     "allow_root": str(root / "allowed"),
                     "personal_path": "/home/example/private",
                 },
@@ -106,6 +107,7 @@ class NotebookWorkerContractTests(unittest.TestCase):
                     "notebook_url": "https://notebook.google.com/notebook/example",
                     "artifact_title": "Generic Artifact",
                     "output_path": str(allowed / "escape" / "out.mp4"),
+                    "receipt_path": str(allowed / "receipt.json"),
                     "allow_root": str(allowed),
                 },
             )
@@ -125,6 +127,7 @@ class NotebookWorkerContractTests(unittest.TestCase):
                     "notebook_url": "https://notebook.google.com/notebook/example",
                     "artifact_title": "Generic Artifact",
                     "output_path": str(outside_parent / "out.mp4"),
+                    "receipt_path": str(allowed / "receipt.json"),
                     "allow_root": str(allowed),
                 },
             )
@@ -206,6 +209,7 @@ class NotebookWorkerContractTests(unittest.TestCase):
                 "artifact_title": "Short overview",
                 "allow_root": str(root),
                 "output_path": "relative.mp4",
+                "receipt_path": str(root / "receipt.json"),
             }
             with self.assertRaisesRegex(ValueError, "absolute"):
                 validate_notebook_request(request)
@@ -285,6 +289,7 @@ class NotebookWorkerContractTests(unittest.TestCase):
                 "artifact_title": "Short overview",
                 "allow_root": str(root),
                 "output_path": str(root / "out.mp4"),
+                "receipt_path": str(root / "receipt.json"),
             }
             # Test non-string or empty-string values for each required field
             bad_cases = [
@@ -299,6 +304,8 @@ class NotebookWorkerContractTests(unittest.TestCase):
                 ("artifact_title", ""),
                 ("output_path", 456),
                 ("output_path", ""),
+                ("receipt_path", None),
+                ("receipt_path", ""),
                 ("allow_root", False),
                 ("allow_root", ""),
             ]
@@ -486,6 +493,7 @@ class NotebookWorkerContractTests(unittest.TestCase):
                 "artifact_title": "Short overview",
                 "allow_root": str(root),
                 "output_path": str(root / "out.mp4"),
+                "receipt_path": str(root / "receipt.json"),
             }
             for malicious_url in (
                 "https://notebook.google.com.evil.example/notebook/example",
@@ -518,8 +526,9 @@ class NotebookWorkerContractTests(unittest.TestCase):
                 "artifact_title": "Short overview",
                 "allow_root": str(root),
                 "output_path": str(root / "out.mp4"),
+                "receipt_path": str(root / "receipt.json"),
             }
-            for schema_version in (2, True, "1"):
+            for schema_version in (2, True, "1", 1.0):
                 with (
                     self.subTest(download_schema_version=schema_version),
                     self.assertRaisesRegex(ValueError, "schema_version must be 1"),
@@ -537,7 +546,7 @@ class NotebookWorkerContractTests(unittest.TestCase):
                 "allow_root": str(root),
                 "receipt_path": str(root / "receipt.json"),
             }
-            for schema_version in (99, True, "1"):
+            for schema_version in (99, True, "1", 1.0):
                 with (
                     self.subTest(generation_schema_version=schema_version),
                     self.assertRaisesRegex(ValueError, "schema_version must be 1"),
@@ -563,8 +572,14 @@ class NotebookWorkerContractTests(unittest.TestCase):
                 },
                 "evidence": {"local_worker": True},
             }
-            with self.assertRaisesRegex(ValueError, "schema_version must be 1"):
-                validate_notebook_receipt(receipt, allow_root=root)
+            for schema_version in (0, True, "1", 1.0):
+                with (
+                    self.subTest(download_receipt_schema_version=schema_version),
+                    self.assertRaisesRegex(ValueError, "schema_version must be 1"),
+                ):
+                    validate_notebook_receipt(
+                        dict(receipt, schema_version=schema_version), allow_root=root
+                    )
 
             gen_receipt = {
                 "schema_version": 5,
@@ -582,8 +597,14 @@ class NotebookWorkerContractTests(unittest.TestCase):
                     "generation_state": "queued",
                 },
             }
-            with self.assertRaisesRegex(ValueError, "schema_version must be 1"):
-                validate_notebook_generation_receipt(gen_receipt)
+            for schema_version in (5, True, "1", 1.0):
+                with (
+                    self.subTest(generation_receipt_schema_version=schema_version),
+                    self.assertRaisesRegex(ValueError, "schema_version must be 1"),
+                ):
+                    validate_notebook_generation_receipt(
+                        dict(gen_receipt, schema_version=schema_version)
+                    )
 
     def test_generation_error_receipt_is_valid_but_cannot_advance_workflow(self):
         from workflow_automation.contracts import validate_notebook_generation_receipt

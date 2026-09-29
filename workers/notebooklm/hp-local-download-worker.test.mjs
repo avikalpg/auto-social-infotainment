@@ -77,6 +77,7 @@ test('download worker validate rejects missing or non-string or whitespace-only 
     notebook_url: 'https://notebook.google.com/notebook/example',
     artifact_title: 'Artifact',
     output_path: '/tmp/out.mp4',
+    receipt_path: '/tmp/receipt.json',
     allow_root: '/tmp',
   };
 
@@ -92,6 +93,8 @@ test('download worker validate rejects missing or non-string or whitespace-only 
     ['artifact_title', ''],
     ['output_path', 456],
     ['output_path', ''],
+    ['receipt_path', null],
+    ['receipt_path', ''],
     ['allow_root', false],
     ['allow_root', ''],
   ];
@@ -133,19 +136,42 @@ test('verified downloads publish atomically without replacing an existing artifa
     const temporary = path.join(root, '.video.part');
     const destination = path.join(root, 'video.mp4');
     await fs.writeFile(temporary, 'verified');
-    await publishVerifiedDownload(temporary, destination);
+    await publishVerifiedDownload(temporary, destination, root);
     assert.equal(await fs.readFile(destination, 'utf8'), 'verified');
     await assert.rejects(() => fs.stat(temporary), { code: 'ENOENT' });
 
     const retryTemporary = path.join(root, '.retry.part');
     await fs.writeFile(retryTemporary, 'partial retry');
     await assert.rejects(
-      () => publishVerifiedDownload(retryTemporary, destination),
+      () => publishVerifiedDownload(retryTemporary, destination, root),
       { code: 'EEXIST' },
     );
     assert.equal(await fs.readFile(destination, 'utf8'), 'verified');
   } finally {
     await fs.rm(root, { recursive: true, force: true });
+  }
+});
+test('verified download publication revalidates destination containment and symlinks', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'notebooklm-download-'));
+  const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'notebooklm-outside-'));
+  try {
+    const temporary = path.join(root, '.video.part');
+    await fs.writeFile(temporary, 'verified');
+    await assert.rejects(
+      () => publishVerifiedDownload(temporary, path.join(outside, 'video.mp4'), root),
+      /outside configured allow_root/,
+    );
+
+    const symlinkDestination = path.join(root, 'video.mp4');
+    await fs.symlink(path.join(outside, 'video.mp4'), symlinkDestination);
+    await assert.rejects(
+      () => publishVerifiedDownload(temporary, symlinkDestination, root),
+      /output_path must not be a symlink/,
+    );
+    assert.equal(await fs.readFile(temporary, 'utf8'), 'verified');
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+    await fs.rm(outside, { recursive: true, force: true });
   }
 });
 test('existing outputs require a matching receipt identity and hash', () => {

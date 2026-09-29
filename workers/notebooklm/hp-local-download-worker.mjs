@@ -7,8 +7,8 @@ import { spawn } from 'node:child_process';
 
 import { fileURLToPath } from 'node:url';
 
-const REQUIRED = ['request_id','story_id','notebook_url','artifact_title','output_path','allow_root'];
-const ALLOWED = new Set(['schema_version',...REQUIRED,'request_token','receipt_path','expected_format','expected_container','expected_duration_seconds','cdp_url','ffprobe_bin','timestamp']);
+const REQUIRED = ['request_id','story_id','notebook_url','artifact_title','output_path','receipt_path','allow_root'];
+const ALLOWED = new Set(['schema_version',...REQUIRED,'request_token','expected_format','expected_container','expected_duration_seconds','cdp_url','ffprobe_bin','timestamp']);
 const fail = (message) => { throw new Error(message); };
 const inside = (child, root) => { const rel=path.relative(root, child); return rel === '' || (rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel)); };
 async function safePath(candidate, root, field) {
@@ -53,14 +53,25 @@ export async function atomicJson(file, value, allowRoot) {
  try { handle=await fs.open(tmp,'wx',0o600); await handle.writeFile(JSON.stringify(value,null,2)+'\n'); await handle.sync(); await handle.close(); handle=undefined; await fs.rename(tmp,pinnedFile); await dirHandle.sync(); }
  finally { await handle?.close().catch(()=>{}); await fs.unlink(tmp).catch(()=>{}); await dirHandle.close().catch(()=>{}); }
 }
-export async function publishVerifiedDownload(temporary, destination) {
- const handle=await fs.open(temporary,'r');
- try { await handle.sync(); } finally { await handle.close(); }
- // link() publishes without replacing a destination created by a concurrent worker.
- await fs.link(temporary,destination);
- await fs.unlink(temporary);
- const dirHandle=await fs.open(path.dirname(destination),'r');
- try { await dirHandle.sync(); } finally { await dirHandle.close(); }
+export async function publishVerifiedDownload(temporary, destination, allowRoot) {
+ const validated=await safePath(destination,allowRoot,'output_path');
+ const dir=path.dirname(validated);
+ const dirHandle=await fs.open(dir,fsConstants.O_RDONLY|fsConstants.O_DIRECTORY|fsConstants.O_NOFOLLOW);
+ const pinnedDir=`/proc/self/fd/${dirHandle.fd}`;
+ try {
+  const realRoot=await fs.realpath(path.resolve(allowRoot));
+  const pinnedRealDir=await fs.realpath(pinnedDir);
+  if(!inside(pinnedRealDir,realRoot))fail('output_path parent moved outside configured allow_root');
+  const pinnedDestination=path.join(pinnedDir,path.basename(validated));
+  try { if((await fs.lstat(pinnedDestination)).isSymbolicLink())fail('output_path must not be a symlink'); }
+  catch(e) { if(e?.code!=='ENOENT')throw e; }
+  const handle=await fs.open(temporary,'r');
+  try { await handle.sync(); } finally { await handle.close(); }
+  // link() publishes through the pinned directory without replacing a concurrent artifact.
+  await fs.link(temporary,pinnedDestination);
+  await fs.unlink(temporary);
+  await dirHandle.sync();
+ } finally { await dirHandle.close().catch(()=>{}); }
 }
 function run(bin,args){return new Promise((resolve,reject)=>{const p=spawn(bin,args);let out='',err='';p.stdout.on('data',d=>out+=d);p.stderr.on('data',d=>err+=d);p.on('error',reject);p.on('close',c=>c===0?resolve(out):reject(new Error(`${bin} failed rc=${c}: ${err.trim()}`)));});}
 async function sha256(file){const b=await fs.readFile(file);return crypto.createHash('sha256').update(b).digest('hex');}
@@ -90,7 +101,7 @@ export async function validate(req){
  if(req.expected_format!==undefined&&req.expected_format!=='Short')fail('expected_format must be Short');
  if(req.expected_duration_seconds!==undefined&&(typeof req.expected_duration_seconds!=='number'||!Number.isFinite(req.expected_duration_seconds)||req.expected_duration_seconds<=0))fail('expected_duration_seconds must be a positive number');
  req.output_path=await safePath(req.output_path,req.allow_root,'output_path');
- req.receipt_path=await safePath(req.receipt_path||path.join(req.allow_root,`${req.request_id}.receipt.json`),req.allow_root,'receipt_path');
+ req.receipt_path=await safePath(req.receipt_path,req.allow_root,'receipt_path');
 }
 function verifyExpected(a,req){
  // expected_format names the queued NotebookLM overview, not a media container.
@@ -163,7 +174,7 @@ async function main(){
     if(failure)fail(`download failed: ${failure}`);
     const a=await probe(temporary,req.ffprobe_bin);
     verifyExpected(a,req);
-    await publishVerifiedDownload(temporary,req.output_path);
+    await publishVerifiedDownload(temporary,req.output_path,req.allow_root);
     const r={schema_version:1,request_id:req.request_id,story_id:req.story_id,...(req.request_token?{request_token:req.request_token}:{}),status:'done',notebook_url:req.notebook_url,...(req.expected_format?{video_format:req.expected_format}:{}),output_path:req.output_path,allow_root:req.allow_root,timestamp:new Date().toISOString(),artifact:a,evidence:{idempotent_existing:false,artifact_title:req.artifact_title,suggested_filename:download.suggestedFilename(),selector_attempts:attempt,download_failure:null,local_worker:true}};
     await atomicJson(receipt,r,req.allow_root);
     console.log(JSON.stringify(r));

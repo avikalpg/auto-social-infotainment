@@ -250,7 +250,7 @@ def _execute_stage(state: StoryState, stage: str, cfg: Config, dry_run: bool = F
             caption_result = CommandAdapter(
                 "downstream platform caption generator", cfg.caption_generator_cmd
             ).run([str(caption_request_path)], dry_run)
-            caption = read_generated_caption(caption_output_path)
+            caption = read_generated_caption(caption_output_path, allowed_root=handoff_root)
             package_dir = create_content_package(
                 cfg.content_root, state.story_id, final_video, caption, cfg.ffprobe_bin
             )

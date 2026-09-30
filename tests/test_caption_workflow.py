@@ -65,6 +65,26 @@ class CaptionWorkflowTests(unittest.TestCase):
             (root / "caption.md").write_text("\nPlatform post copy\n")
             self.assertEqual(read_generated_caption(root / "caption.md"), "Platform post copy")
 
+    def test_generated_caption_secure_read_rejects_symlinks_and_root_escapes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            trusted = root / "trusted"
+            trusted.mkdir()
+            caption = trusted / "caption.md"
+            caption.write_text("Safe copy")
+            self.assertEqual(
+                read_generated_caption(caption, allowed_root=trusted), "Safe copy"
+            )
+
+            outside = root / "outside.md"
+            outside.write_text("Untrusted copy")
+            caption.unlink()
+            caption.symlink_to(outside)
+            with self.assertRaisesRegex(RuntimeError, "without symlinks"):
+                read_generated_caption(caption, allowed_root=trusted)
+            with self.assertRaisesRegex(RuntimeError, "within the trusted root"):
+                read_generated_caption(outside, allowed_root=trusted)
+
     def test_video_produced_validates_caption_adapter_before_expensive_work(self):
         """Verify that video_produced stage checks caption adapter and assets before expensive work."""
         from types import SimpleNamespace

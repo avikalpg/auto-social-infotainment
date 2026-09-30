@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import stat
 from pathlib import Path
 from typing import Any
 
@@ -71,10 +73,67 @@ def write_caption_request(
     return request
 
 
-def read_generated_caption(path: Path) -> str:
-    if not path.is_file():
-        raise RuntimeError("caption generator did not write its requested output_path")
-    caption = path.read_text().strip()
+def read_generated_caption(path: Path, *, allowed_root: Path | None = None) -> str:
+    """Read generated copy without following a worker-created symlink.
+
+    Production callers provide ``allowed_root`` so every path component is opened relative
+    to a pinned trusted directory. The optional argument preserves the standalone helper's
+    existing API while still rejecting a symlink at the output path.
+    """
+    root_fd: int | None = None
+    directory_fd: int | None = None
+    file_fd: int | None = None
+    try:
+        if allowed_root is None:
+            file_fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        else:
+            lexical_root = Path(os.path.abspath(allowed_root))
+            lexical_path = Path(os.path.abspath(path))
+            try:
+                relative = lexical_path.relative_to(lexical_root)
+            except ValueError as error:
+                raise RuntimeError("caption output_path must be within the trusted root") from error
+            if not relative.parts:
+                raise RuntimeError("caption output_path must name a regular file")
+
+            root_fd = os.open(lexical_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            directory_fd = os.dup(root_fd)
+            for component in relative.parts[:-1]:
+                next_fd = os.open(
+                    component,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                    dir_fd=directory_fd,
+                )
+                os.close(directory_fd)
+                directory_fd = next_fd
+            file_fd = os.open(
+                relative.parts[-1], os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory_fd
+            )
+            opened_root = Path(f"/proc/self/fd/{root_fd}").resolve()
+            opened_file = Path(f"/proc/self/fd/{file_fd}").resolve()
+            try:
+                opened_file.relative_to(opened_root)
+            except ValueError as error:
+                raise RuntimeError("caption output_path escaped the trusted root") from error
+
+        if not stat.S_ISREG(os.fstat(file_fd).st_mode):
+            raise RuntimeError("caption generator output_path must be a regular file")
+        with os.fdopen(file_fd, encoding="utf-8") as handle:
+            file_fd = None
+            caption = handle.read().strip()
+    except FileNotFoundError as error:
+        raise RuntimeError("caption generator did not write its requested output_path") from error
+    except OSError as error:
+        raise RuntimeError(
+            "caption generator output_path must be a regular file without symlinks"
+        ) from error
+    finally:
+        if file_fd is not None:
+            os.close(file_fd)
+        if directory_fd is not None:
+            os.close(directory_fd)
+        if root_fd is not None:
+            os.close(root_fd)
     if not caption:
         raise RuntimeError("caption generator wrote an empty platform caption")
     return caption

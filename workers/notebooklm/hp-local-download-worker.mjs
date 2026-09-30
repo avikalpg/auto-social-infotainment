@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs/promises';
-import { constants as fsConstants } from 'node:fs';
+import { constants as fsConstants, createReadStream } from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
@@ -74,7 +74,11 @@ export async function publishVerifiedDownload(temporary, destination, allowRoot)
  } finally { await dirHandle.close().catch(()=>{}); }
 }
 function run(bin,args){return new Promise((resolve,reject)=>{const p=spawn(bin,args);let out='',err='';p.stdout.on('data',d=>out+=d);p.stderr.on('data',d=>err+=d);p.on('error',reject);p.on('close',c=>c===0?resolve(out):reject(new Error(`${bin} failed rc=${c}: ${err.trim()}`)));});}
-async function sha256(file){const b=await fs.readFile(file);return crypto.createHash('sha256').update(b).digest('hex');}
+export async function sha256(file){
+ const hash=crypto.createHash('sha256');
+ for await(const chunk of createReadStream(file))hash.update(chunk);
+ return hash.digest('hex');
+}
 async function probe(file,bin='ffprobe'){
  const raw=await run(bin,['-v','error','-print_format','json','-show_format','-show_streams',file]); const d=JSON.parse(raw); const streams=d.streams||[]; const video=streams.find(s=>s.codec_type==='video'); const audio=streams.find(s=>s.codec_type==='audio');
  if(!video) fail('downloaded artifact has no video stream'); const stat=await fs.stat(file); if(stat.size<1024) fail('downloaded artifact is unexpectedly small');
@@ -123,6 +127,7 @@ export function verifyExistingReceipt(receipt,req,artifact){
  for(const key of ['request_id','story_id','notebook_url','output_path']){
   if(receipt[key]!==req[key])fail(`existing receipt ${key} does not match request`);
  }
+ if(receipt.allow_root!==req.allow_root)fail('existing receipt allow_root does not match request');
  if(req.request_token&&receipt.request_token!==req.request_token)fail('existing receipt request_token does not match request');
  if(req.expected_format&&receipt.video_format!==req.expected_format)fail('existing receipt video_format does not match request');
  if(receipt.evidence?.artifact_title!==req.artifact_title)fail('existing receipt artifact_title does not match request');

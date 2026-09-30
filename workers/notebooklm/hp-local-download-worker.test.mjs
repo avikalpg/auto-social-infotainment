@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -7,6 +8,7 @@ import test from 'node:test';
 import {
   atomicJson,
   publishVerifiedDownload,
+  sha256,
   validate,
   validateCdpUrl,
   validateNotebookUrl,
@@ -209,6 +211,19 @@ test('verified download publication revalidates destination containment and syml
     await fs.rm(outside, { recursive: true, force: true });
   }
 });
+test('sha256 streams artifact contents correctly', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'notebooklm-hash-'));
+  try {
+    const artifact = path.join(root, 'artifact.mp4');
+    const content = Buffer.alloc(1024 * 1024 + 17, 0x61);
+    await fs.writeFile(artifact, content);
+    const expected = crypto.createHash('sha256').update(content).digest('hex');
+    assert.equal(await sha256(artifact), expected);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test('existing outputs require a matching receipt identity and hash', () => {
   const req = {
     request_id: 'download-1',
@@ -217,6 +232,7 @@ test('existing outputs require a matching receipt identity and hash', () => {
     notebook_url: 'https://notebook.google.com/notebook/example',
     artifact_title: 'Short overview',
     output_path: '/tmp/video.mp4',
+    allow_root: '/tmp',
     expected_format: 'Short',
   };
   const artifact = {
@@ -236,6 +252,7 @@ test('existing outputs require a matching receipt identity and hash', () => {
     notebook_url: req.notebook_url,
     video_format: 'Short',
     output_path: req.output_path,
+    allow_root: req.allow_root,
     artifact,
     evidence: { artifact_title: req.artifact_title },
   };
@@ -243,6 +260,10 @@ test('existing outputs require a matching receipt identity and hash', () => {
   assert.throws(
     () => verifyExistingReceipt({ ...receipt, request_token: 'other' }, req, artifact),
     /request_token does not match/,
+  );
+  assert.throws(
+    () => verifyExistingReceipt({ ...receipt, allow_root: '/different' }, req, artifact),
+    /allow_root does not match/,
   );
   assert.throws(
     () => verifyExistingReceipt({ ...receipt, artifact: { ...artifact, sha256: 'b'.repeat(64) } }, req, artifact),

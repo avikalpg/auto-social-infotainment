@@ -172,6 +172,10 @@ def validate_notebook_generation_receipt(data: dict[str, Any]) -> None:
         or data["schema_version"] != 1
     ):
         raise ValueError("notebook generation receipt schema_version must be 1")
+    if "status" in data and not isinstance(data["status"], str):
+        raise ValueError("notebook generation receipt status must be a string")
+    if "evidence" in data and not isinstance(data["evidence"], dict):
+        raise ValueError("notebook generation receipt evidence must be object")
     require_keys(
         data,
         {
@@ -204,8 +208,6 @@ def validate_notebook_generation_receipt(data: dict[str, Any]) -> None:
         raise ValueError("notebook generation receipt video_format must be Short")
     _validate_notebook_url(data["notebook_url"])
     evidence = data["evidence"]
-    if not isinstance(evidence, dict):
-        raise TypeError("notebook generation receipt evidence must be object")
     reject_unsupported_keys(
         evidence,
         {
@@ -221,6 +223,16 @@ def validate_notebook_generation_receipt(data: dict[str, Any]) -> None:
         },
         "notebook generation receipt evidence",
     )
+    for key in ("request_path", "allow_root", "cdp_url", "generation_state", "confirmation"):
+        if key in evidence and (
+            not isinstance(evidence[key], str) or not evidence[key].strip()
+        ):
+            raise ValueError(
+                f"notebook generation receipt evidence {key} must be a non-empty string"
+            )
+    for key in ("generation_only", "download_attempted", "page_reused", "already_queued"):
+        if key in evidence and not isinstance(evidence[key], bool):
+            raise ValueError(f"notebook generation receipt evidence {key} must be boolean")
     if (
         evidence.get("generation_only") is not True
         or evidence.get("download_attempted") is not False
@@ -264,6 +276,11 @@ def validate_notebook_request(data: dict[str, Any]) -> None:
         "ffprobe_bin",
         "timestamp",
     }
+    extra = set(data) - allowed
+    if extra:
+        raise ValueError(
+            f"notebook download request has unsupported keys: {', '.join(sorted(extra))}"
+        )
     for key in (
         "request_id",
         "story_id",
@@ -282,11 +299,6 @@ def validate_notebook_request(data: dict[str, Any]) -> None:
     ):
         raise ValueError("notebook download request request_token must be a non-empty string")
 
-    extra = set(data) - allowed
-    if extra:
-        raise ValueError(
-            f"notebook download request has unsupported keys: {', '.join(sorted(extra))}"
-        )
     _validate_notebook_url(data["notebook_url"])
     allow_root = Path(str(data["allow_root"]))
     if not allow_root.is_absolute():

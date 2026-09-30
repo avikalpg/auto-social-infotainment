@@ -616,6 +616,63 @@ class NotebookWorkerContractTests(unittest.TestCase):
                         dict(gen_receipt, schema_version=schema_version)
                     )
 
+    def test_generation_receipt_rejects_malformed_status_and_evidence_types(self):
+        from workflow_automation.contracts import validate_notebook_generation_receipt
+
+        receipt = {
+            "schema_version": 1,
+            "request_id": "r1",
+            "story_id": "s1",
+            "request_token": "tok",
+            "status": "queued",
+            "artifact_title": "Short overview",
+            "notebook_url": "https://notebook.google.com/notebook/example",
+            "video_format": "Short",
+            "timestamp": "2026-09-30T00:00:00Z",
+            "evidence": {
+                "generation_only": True,
+                "download_attempted": False,
+                "generation_state": "queued",
+            },
+        }
+        for value in ({}, [], True):
+            with self.subTest(status=value), self.assertRaisesRegex(ValueError, "status"):
+                validate_notebook_generation_receipt(dict(receipt, status=value))
+
+        malformed_evidence = (
+            ("generation_only", []),
+            ("download_attempted", {}),
+            ("generation_state", []),
+            ("page_reused", "yes"),
+            ("already_queued", 1),
+            ("request_path", {}),
+            ("allow_root", []),
+            ("cdp_url", True),
+            ("confirmation", False),
+        )
+        for key, value in malformed_evidence:
+            mutation = dict(receipt)
+            mutation["evidence"] = {**receipt["evidence"], key: value}
+            with self.subTest(evidence=key), self.assertRaisesRegex(ValueError, key):
+                validate_notebook_generation_receipt(mutation)
+
+    def test_download_request_rejects_unknown_keys_before_processing_paths(self):
+        from workflow_automation.contracts import validate_notebook_request
+
+        request = {
+            "schema_version": 1,
+            "request_id": "r1",
+            "story_id": "s1",
+            "notebook_url": "https://notebook.google.com/notebook/example",
+            "artifact_title": "Short overview",
+            "allow_root": [],
+            "output_path": {},
+            "receipt_path": True,
+            "unexpected": "reject first",
+        }
+        with self.assertRaisesRegex(ValueError, "unsupported keys: unexpected"):
+            validate_notebook_request(request)
+
     def test_generation_error_receipt_is_valid_but_cannot_advance_workflow(self):
         from workflow_automation.contracts import validate_notebook_generation_receipt
         from workflow_automation.notebook import ingest_generation_receipt

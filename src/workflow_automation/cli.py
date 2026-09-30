@@ -57,12 +57,12 @@ def load_or_create(store: StateStore, cfg: Config, sid: str | None) -> StoryStat
 
 
 def command_stage(args: argparse.Namespace, cfg: Config) -> int:
-    errors = cfg.validate()
+    stage = CMD_STAGE[args.command]
+    errors = cfg.validate(stage=stage, dry_run=args.dry_run)
     if errors:
         print(json.dumps({"errors": errors}), file=sys.stderr)
         return ExitCode.CONFIG
     store = StateStore(cfg.state_dir)
-    stage = CMD_STAGE[args.command]
     try:
         with FileLock(cfg.lock_path):
             try:

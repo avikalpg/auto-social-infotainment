@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import shlex
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -91,11 +92,49 @@ class Config:
             int(val("max_retries", "3")),
         )
 
-    def validate(self) -> list[str]:
+    def validate(self, *, stage: str | None = None, dry_run: bool = False) -> list[str]:
         errors = []
         for p in (self.sources_path, self.stories_path):
             if not p.exists():
                 errors.append(f"missing configured path: {p}")
         if self.max_retries < 1 or self.max_retries > 10:
             errors.append("max_retries must be between 1 and 10")
+        if dry_run or stage not in {"video_queued", "video_produced"}:
+            return errors
+
+        roots = {"notebooklm_request_dir": self.notebooklm_request_dir}
+        if stage == "video_produced":
+            roots.update(
+                {
+                    "notebooklm_output_root": self.notebooklm_output_root,
+                    "content_root": self.content_root,
+                }
+            )
+        for label, root in roots.items():
+            if not root.is_absolute():
+                errors.append(f"{label} must be an absolute path")
+            elif root == Path(root.anchor):
+                errors.append(f"{label} must not be the filesystem root")
+
+        commands = {
+            "notebooklm_generation_worker_cmd": self.notebooklm_generation_worker_cmd
+        }
+        if stage == "video_produced":
+            commands = {
+                "notebooklm_worker_cmd": self.notebooklm_worker_cmd,
+                "caption_generator_cmd": self.caption_generator_cmd,
+            }
+        for label, command in commands.items():
+            if not command:
+                errors.append(f"{label} must be configured for {stage}")
+
+        if stage == "video_produced":
+            if not self.branded_outro_path or not self.branded_outro_path.is_file():
+                errors.append("branded_outro_path must reference an existing file")
+            for label, executable in (
+                ("ffmpeg_bin", self.ffmpeg_bin),
+                ("ffprobe_bin", self.ffprobe_bin),
+            ):
+                if shutil.which(executable) is None:
+                    errors.append(f"{label} is not executable or was not found: {executable}")
         return errors

@@ -11,7 +11,7 @@ from workflow_automation.media import (
     replace_outro_visuals_preserve_audio,
     verify_canonical_pcm_equal,
 )
-from workflow_automation.notebook import ingest_download_receipt, write_download_request
+from workflow_automation.notebook import parse_download_receipt, write_download_request
 from workflow_automation.packages import (
     apply_publication_receipt,
     create_content_package,
@@ -132,7 +132,7 @@ class VerticalSliceTests(unittest.TestCase):
         }
         (root / "receipt.json").write_text(json.dumps(receipt))
         self.assertEqual(
-            ingest_download_receipt(root / "receipt.json", allow_root=root / "out")["sha256"],
+            parse_download_receipt(root / "receipt.json", allow_root=root / "out")["sha256"],
             "a" * 64,
         )
 

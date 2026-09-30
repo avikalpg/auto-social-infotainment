@@ -431,6 +431,7 @@ class NotebookWorkerContractTests(unittest.TestCase):
         from workflow_automation.notebook import (
             ingest_download_receipt,
             ingest_worker_receipt,
+            parse_download_receipt,
         )
 
         with tempfile.TemporaryDirectory() as d:
@@ -471,13 +472,16 @@ class NotebookWorkerContractTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "within allow_root"):
                 ingest_worker_receipt(receipt_path, allow_root=allowed)
 
-            # Contained output_path succeeds
+            # Structural parsing succeeds for a contained path, but trusted ingestion
+            # refuses to accept receipt claims when the artifact does not exist.
             receipt_data["output_path"] = str(allowed / "out.mp4")
             receipt_path.write_text(json.dumps(receipt_data))
-            art = ingest_download_receipt(receipt_path, allow_root=allowed)
+            art = parse_download_receipt(receipt_path, allow_root=allowed)
             self.assertEqual(art["request_id"], "r1")
-            art2 = ingest_worker_receipt(receipt_path, allow_root=allowed)
-            self.assertEqual(art2["request_id"], "r1")
+            with self.assertRaisesRegex(ValueError, "does not exist"):
+                ingest_download_receipt(receipt_path, allow_root=allowed)
+            with self.assertRaisesRegex(ValueError, "does not exist"):
+                ingest_worker_receipt(receipt_path, allow_root=allowed)
 
             # Valid contained path passes
             contained_receipt = dict(

@@ -7,12 +7,14 @@ import test from 'node:test';
 
 import {
   atomicJson,
+  openPinnedArtifact,
   publishVerifiedDownload,
   sha256,
   validate,
   validateCdpUrl,
   validateNotebookUrl,
   verifyExistingReceipt,
+  verifyPinnedPathUnchanged,
 } from './hp-local-download-worker.mjs';
 
 test('download receipt publication rejects a symlink destination', async () => {
@@ -269,4 +271,28 @@ test('existing outputs require a matching receipt identity and hash', () => {
     () => verifyExistingReceipt({ ...receipt, artifact: { ...artifact, sha256: 'b'.repeat(64) } }, req, artifact),
     /sha256 does not match/,
   );
+});
+
+
+test('existing output verification rejects pathname replacement after pinning', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'notebooklm-pinned-'));
+  const output = path.join(root, 'video.mp4');
+  const displaced = path.join(root, 'displaced.mp4');
+  try {
+    await fs.writeFile(output, Buffer.alloc(2048, 0x61));
+    const pinned = await openPinnedArtifact(output);
+    try {
+      const artifact = { sha256: await sha256(pinned.path) };
+      await fs.rename(output, displaced);
+      await fs.writeFile(output, Buffer.alloc(2048, 0x61));
+      await assert.rejects(
+        () => verifyPinnedPathUnchanged(output, pinned, artifact),
+        /changed during verification/,
+      );
+    } finally {
+      await pinned.handle.close();
+    }
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
 });

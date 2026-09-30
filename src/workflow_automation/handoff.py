@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from .media import ffprobe_validate, sha256_file
-from .notebook import ingest_download_receipt
+from .notebook import parse_download_receipt
 from .state import utcnow
 
 
@@ -87,6 +87,89 @@ def _verify_receipt_metadata(
     # stream durations with tiny rounding differences, so accept at most 10 ms.
     if abs(float(artifact["duration_seconds"]) - actual["duration_seconds"]) > 0.01:
         raise ValueError("notebook artifact receipt duration_seconds does not match ffprobe result")
+
+
+@contextmanager
+def _verified_download_artifact(
+    receipt_path: Path,
+    *,
+    allowed_output_root: Path,
+    expected_request_id: str | None = None,
+    expected_story_id: str | None = None,
+    expected_request_token: str | None = None,
+    expected_video_format: str | None = None,
+    expected_notebook_url: str | None = None,
+    expected_artifact_title: str | None = None,
+    ffprobe_bin: str = "ffprobe",
+) -> Iterator[
+    tuple[dict[str, Any], Path, dict[str, Any], str, dict[str, Any], dict[str, Any]]
+]:
+    """Yield a pinned artifact only after receipt, hash, and media verification."""
+    artifact = parse_download_receipt(
+        receipt_path,
+        allow_root=allowed_output_root,
+        expected_request_id=expected_request_id,
+        expected_story_id=expected_story_id,
+        expected_request_token=expected_request_token,
+        expected_video_format=expected_video_format,
+    )
+    receipt_data = json.loads(receipt_path.read_text())
+    evidence = receipt_data["evidence"]
+    if (
+        expected_artifact_title is not None
+        and "artifact_title" in evidence
+        and evidence["artifact_title"] != expected_artifact_title
+    ):
+        raise ValueError(
+            "download receipt evidence artifact_title mismatch: "
+            f"expected {expected_artifact_title}, got {evidence['artifact_title']}"
+        )
+    if (
+        expected_notebook_url is not None
+        and "notebook_url" in receipt_data
+        and receipt_data["notebook_url"] != expected_notebook_url
+    ):
+        raise ValueError(
+            "download receipt notebook_url mismatch: "
+            f"expected {expected_notebook_url}, got {receipt_data['notebook_url']}"
+        )
+    source = Path(str(artifact["output_path"]))
+    if not _is_within(source, allowed_output_root):
+        raise ValueError(f"notebook artifact path escapes allowed output root: {source}")
+    if not source.is_file():
+        raise ValueError(f"notebook artifact does not exist: {source}")
+
+    expected_sha = str(artifact["sha256"])
+    with _open_contained_source(source, allowed_output_root) as pinned_source:
+        actual_sha = sha256_file(pinned_source)
+        if actual_sha != expected_sha:
+            raise ValueError("notebook artifact sha256 does not match worker receipt")
+        media = ffprobe_validate(pinned_source, ffprobe_bin)
+        _verify_receipt_metadata(artifact, media, pinned_source, actual_sha)
+        yield artifact, pinned_source, media, actual_sha, receipt_data, evidence
+
+
+def verify_download_receipt_artifact(
+    receipt_path: Path,
+    *,
+    allowed_output_root: Path,
+    expected_request_id: str | None = None,
+    expected_story_id: str | None = None,
+    expected_request_token: str | None = None,
+    expected_video_format: str | None = None,
+    ffprobe_bin: str = "ffprobe",
+) -> dict[str, Any]:
+    """Return receipt data only after verifying the pinned artifact it describes."""
+    with _verified_download_artifact(
+        receipt_path,
+        allowed_output_root=allowed_output_root,
+        expected_request_id=expected_request_id,
+        expected_story_id=expected_story_id,
+        expected_request_token=expected_request_token,
+        expected_video_format=expected_video_format,
+        ffprobe_bin=ffprobe_bin,
+    ) as (artifact, _source, _media, _sha256, _receipt, _evidence):
+        return artifact
 
 
 @contextmanager
@@ -228,48 +311,18 @@ def handoff_notebooklm_video(
     The handoff deliberately copies rather than moves the HP-produced artifact, so a failed
     downstream outro/package operation cannot destroy the worker's independently verified output.
     """
-    artifact = ingest_download_receipt(
+    with _verified_download_artifact(
         receipt_path,
-        allow_root=allowed_output_root,
+        allowed_output_root=allowed_output_root,
         expected_request_id=expected_request_id,
         expected_story_id=expected_story_id,
         expected_request_token=expected_request_token,
         expected_video_format=expected_video_format,
-    )
-    receipt_data = json.loads(receipt_path.read_text())
-    evidence = receipt_data.get("evidence", {})
-    if (
-        expected_artifact_title is not None
-        and "artifact_title" in evidence
-        and evidence["artifact_title"] != expected_artifact_title
-    ):
-        raise ValueError(
-            f"download receipt evidence artifact_title mismatch: expected {expected_artifact_title}, got {evidence['artifact_title']}"
-        )
-    if (
-        expected_notebook_url is not None
-        and "notebook_url" in receipt_data
-        and receipt_data["notebook_url"] != expected_notebook_url
-    ):
-        raise ValueError(
-            f"download receipt notebook_url mismatch: expected {expected_notebook_url}, got {receipt_data['notebook_url']}"
-        )
-    raw_path = artifact.get("output_path")
-    if not raw_path:
-        raise ValueError("notebook download receipt missing output_path")
-    source = Path(str(raw_path))
-    if not _is_within(source, allowed_output_root):
-        raise ValueError(f"notebook artifact path escapes allowed output root: {source}")
-    if not source.is_file():
-        raise ValueError(f"notebook artifact does not exist: {source}")
-
-    expected_sha = str(artifact["sha256"])
-    with _open_contained_source(source, allowed_output_root) as pinned_source:
-        actual_sha = sha256_file(pinned_source)
-        if actual_sha != expected_sha:
-            raise ValueError("notebook artifact sha256 does not match worker receipt")
-        media = ffprobe_validate(pinned_source, ffprobe_bin)
-        _verify_receipt_metadata(artifact, media, pinned_source, actual_sha)
+        expected_notebook_url=expected_notebook_url,
+        expected_artifact_title=expected_artifact_title,
+        ffprobe_bin=ffprobe_bin,
+    ) as (artifact, pinned_source, media, actual_sha, receipt_data, evidence):
+        source = Path(str(artifact["output_path"]))
         with _open_contained_directory(handoff_root, allowed_handoff_root) as (
             handoff_fd,
             opened_handoff_root,
@@ -305,4 +358,5 @@ def handoff_notebooklm_video(
             if "notebook_url" in receipt_data:
                 handoff["notebook_url"] = receipt_data["notebook_url"]
             _atomic_json_to_directory(handoff_fd, "handoff.json", handoff)
+            handoff["verified_artifact"] = artifact
     return handoff

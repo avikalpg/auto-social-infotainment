@@ -165,6 +165,7 @@ class CaptionWorkflowTests(unittest.TestCase):
             content_root.mkdir()
 
             cfg = SimpleNamespace(
+                notebooklm_generation_worker_cmd=None,
                 notebooklm_worker_cmd=None,
                 caption_generator_cmd=None,
                 branded_outro_path=root / "outro.mp4",
@@ -182,11 +183,11 @@ class CaptionWorkflowTests(unittest.TestCase):
                 source={
                     "notebook_url": "https://notebook.google.com/notebook/test-1",
                     "artifact_title": "Test Title",
+                    "focus_prompt": "Focus on the disputed decision.",
                 },
             )
-            # A dry-run queue stage is sufficient only for downstream dry-run planning.
-            state.stages["video_queued"].status = "dry_run"
-
+            # The queue dry-run persists the exact identity consumed by downstream planning.
+            run_stage(state, "video_queued", cfg, dry_run=True)
             run_stage(state, "video_produced", cfg, dry_run=True)
 
             self.assertEqual(state.stages["video_produced"].status, "dry_run")
@@ -201,6 +202,46 @@ class CaptionWorkflowTests(unittest.TestCase):
             self.assertTrue(verification["planned"]["caption"]["generator"]["dry_run"])
             self.assertIsNone(verification["planned"]["caption"]["generator"]["command"])
             self.assertFalse((req_dir / "STR-011.request.json").exists())
+
+    def test_video_produced_dry_run_rejects_identity_changed_after_queue_plan(self):
+        from types import SimpleNamespace
+
+        from workflow_automation.runner import run_stage
+        from workflow_automation.state import StoryState
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            output_root = root / "downloads"
+            request_dir = root / "requests"
+            content_root = root / "content"
+            output_root.mkdir()
+            request_dir.mkdir()
+            content_root.mkdir()
+            cfg = SimpleNamespace(
+                notebooklm_generation_worker_cmd=None,
+                notebooklm_worker_cmd=None,
+                caption_generator_cmd=None,
+                notebooklm_output_root=output_root,
+                notebooklm_request_dir=request_dir,
+                notebooklm_cdp_url=None,
+                content_root=content_root,
+                ffmpeg_bin="ffmpeg",
+                ffprobe_bin="ffprobe",
+                max_retries=3,
+            )
+            state = StoryState(
+                "STR-018",
+                source={
+                    "notebook_url": "https://notebook.google.com/notebook/test-1",
+                    "artifact_title": "Original title",
+                    "focus_prompt": "Focus on the disputed decision.",
+                },
+            )
+            run_stage(state, "video_queued", cfg, dry_run=True)
+            state.source["artifact_title"] = "Changed title"
+
+            with self.assertRaisesRegex(ValueError, "artifact_title"):
+                run_stage(state, "video_produced", cfg, dry_run=True)
 
 
     def test_video_queued_runs_generation_worker_and_validates_receipt(self):

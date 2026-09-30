@@ -79,6 +79,28 @@ export async function sha256(file){
  for await(const chunk of createReadStream(file))hash.update(chunk);
  return hash.digest('hex');
 }
+export async function openPinnedArtifact(file){
+ const handle=await fs.open(file,fsConstants.O_RDONLY|fsConstants.O_NOFOLLOW);
+ try {
+  const opened=await handle.stat({bigint:true});
+  if(!opened.isFile())fail('existing output must be a regular file');
+  return {handle,stat:opened,path:`/proc/${process.pid}/fd/${handle.fd}`};
+ } catch(e) { await handle.close().catch(()=>{}); throw e; }
+}
+function sameOpenedFile(left,right){
+ return left.dev===right.dev&&left.ino===right.ino&&left.size===right.size&&left.mtimeNs===right.mtimeNs&&left.ctimeNs===right.ctimeNs;
+}
+export async function verifyPinnedPathUnchanged(file,pinned,artifact){
+ let before;
+ try { before=await fs.lstat(file,{bigint:true}); }
+ catch(e) { if(e?.code==='ENOENT')fail('existing output changed during verification'); throw e; }
+ const openedBefore=await pinned.handle.stat({bigint:true});
+ if(before.isSymbolicLink()||!before.isFile()||!sameOpenedFile(before,openedBefore))fail('existing output changed during verification');
+ if(await sha256(file)!==artifact.sha256)fail('existing output changed during verification');
+ const after=await fs.lstat(file,{bigint:true});
+ const openedAfter=await pinned.handle.stat({bigint:true});
+ if(!sameOpenedFile(before,after)||!sameOpenedFile(after,openedAfter))fail('existing output changed during verification');
+}
 async function probe(file,bin='ffprobe'){
  const raw=await run(bin,['-v','error','-print_format','json','-show_format','-show_streams',file]); const d=JSON.parse(raw); const streams=d.streams||[]; const video=streams.find(s=>s.codec_type==='video'); const audio=streams.find(s=>s.codec_type==='audio');
  if(!video) fail('downloaded artifact has no video stream'); const stat=await fs.stat(file); if(stat.size<1024) fail('downloaded artifact is unexpectedly small');
@@ -147,29 +169,35 @@ async function main(){
    if (e?.code !== 'ENOENT') throw e;
  }
  if (existingStat) {
-   const a = await probe(req.output_path, req.ffprobe_bin);
-   verifyExpected(a, req);
-   let priorReceipt;
-   try { priorReceipt=JSON.parse(await fs.readFile(receipt,'utf8')); }
-   catch(e) { if(e?.code==='ENOENT')fail('existing output requires a matching receipt'); throw e; }
-   verifyExistingReceipt(priorReceipt,req,a);
-   const r = {
-     schema_version: 1,
-     request_id: req.request_id,
-     story_id: req.story_id,
-     ...(req.request_token ? {request_token:req.request_token} : {}),
-     status: 'done',
-     notebook_url: req.notebook_url,
-     ...(req.expected_format ? {video_format:req.expected_format} : {}),
-     output_path: req.output_path,
-     allow_root: req.allow_root,
-     timestamp: new Date().toISOString(),
-     artifact: a,
-     evidence: { ...priorReceipt.evidence, idempotent_existing: true, artifact_title: req.artifact_title, local_worker: true }
-   };
-   await atomicJson(receipt, r, req.allow_root);
-   console.log(JSON.stringify(r));
-   return;
+   const pinned=await openPinnedArtifact(req.output_path);
+   try {
+    const a = await probe(pinned.path, req.ffprobe_bin);
+    verifyExpected(a, req);
+    let priorReceipt;
+    try { priorReceipt=JSON.parse(await fs.readFile(receipt,'utf8')); }
+    catch(e) { if(e?.code==='ENOENT')fail('existing output requires a matching receipt'); throw e; }
+    verifyExistingReceipt(priorReceipt,req,a);
+    // Revalidate the pathname, inode, timestamps, size, and hash immediately before
+    // publishing evidence so a concurrent replacement cannot inherit this receipt.
+    await verifyPinnedPathUnchanged(req.output_path,pinned,a);
+    const r = {
+      schema_version: 1,
+      request_id: req.request_id,
+      story_id: req.story_id,
+      ...(req.request_token ? {request_token:req.request_token} : {}),
+      status: 'done',
+      notebook_url: req.notebook_url,
+      ...(req.expected_format ? {video_format:req.expected_format} : {}),
+      output_path: req.output_path,
+      allow_root: req.allow_root,
+      timestamp: new Date().toISOString(),
+      artifact: a,
+      evidence: { ...priorReceipt.evidence, idempotent_existing: true, artifact_title: req.artifact_title, local_worker: true }
+    };
+    await atomicJson(receipt, r, req.allow_root);
+    console.log(JSON.stringify(r));
+    return;
+   } finally { await pinned.handle.close().catch(()=>{}); }
  }
  const { chromium }=await import('playwright-core'); const browser=await chromium.connectOverCDP(req.cdp_url||'http://127.0.0.1:9222');
  let lastError; try { const context=browser.contexts()[0]; if(!context)fail('authenticated Chrome context not found'); let page=context.pages().find(p=>p.url()===req.notebook_url||p.url().includes(new URL(req.notebook_url).pathname)); if(!page)page=await context.newPage();

@@ -15,6 +15,7 @@ from workflow_automation.media import (
     sha256_file,
     verify_audio_stream_preserved,
 )
+from workflow_automation.notebook import ingest_download_receipt
 from workflow_automation.packages import create_content_package, validate_content_package
 
 FFMPEG = shutil.which("ffmpeg")
@@ -442,6 +443,12 @@ class ArtifactHandoffTests(unittest.TestCase):
             }
             receipt_path = root / "receipt.json"
             receipt_path.write_text(json.dumps(receipt))
+            with self.assertRaisesRegex(ValueError, "size_bytes"):
+                ingest_download_receipt(
+                    receipt_path,
+                    allow_root=output_root,
+                    ffprobe_bin=FFPROBE,
+                )
             with self.assertRaisesRegex(ValueError, "size_bytes"):
                 handoff_notebooklm_video(
                     receipt_path,

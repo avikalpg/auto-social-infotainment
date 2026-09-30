@@ -177,7 +177,7 @@ def write_download_request(
     return req
 
 
-def ingest_download_receipt(
+def parse_download_receipt(
     path: Path,
     *,
     allow_root: Path | str,
@@ -186,6 +186,11 @@ def ingest_download_receipt(
     expected_request_token: str | None = None,
     expected_video_format: str | None = None,
 ) -> dict[str, Any]:
+    """Parse and validate receipt structure, identity, and path containment only.
+
+    This function deliberately does not trust the declared artifact metadata. Call
+    ``ingest_download_receipt`` or the handoff API before using the artifact.
+    """
     if not path.is_file():
         raise FileNotFoundError(f"notebook download receipt not found: {path}")
     data = json.loads(path.read_text())
@@ -219,6 +224,31 @@ def ingest_download_receipt(
     if "video_format" in data:
         artifact["video_format"] = data["video_format"]
     return artifact
+
+
+def ingest_download_receipt(
+    path: Path,
+    *,
+    allow_root: Path | str,
+    expected_request_id: str | None = None,
+    expected_story_id: str | None = None,
+    expected_request_token: str | None = None,
+    expected_video_format: str | None = None,
+    ffprobe_bin: str = "ffprobe",
+) -> dict[str, Any]:
+    """Verify a receipt and its actual file, hash, and media metadata."""
+    # Imported lazily because the handoff module uses the structural parser above.
+    from .handoff import verify_download_receipt_artifact
+
+    return verify_download_receipt_artifact(
+        path,
+        allowed_output_root=Path(allow_root),
+        expected_request_id=expected_request_id,
+        expected_story_id=expected_story_id,
+        expected_request_token=expected_request_token,
+        expected_video_format=expected_video_format,
+        ffprobe_bin=ffprobe_bin,
+    )
 
 
 # Legacy function names are retained for import compatibility. Their payload contract is

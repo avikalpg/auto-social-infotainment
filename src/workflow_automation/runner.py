@@ -10,7 +10,6 @@ from .media import append_branded_outro_preserve_audio, verify_audio_hash
 from .notebook import (
     build_download_request,
     build_generation_request,
-    ingest_download_receipt,
     ingest_generation_receipt,
     write_download_request,
     write_generation_request,
@@ -50,6 +49,18 @@ def mark_done(state: StoryState, stage: str, verification: dict[str, object]) ->
 def stage_satisfies_prerequisite(state: StoryState, stage: str, dry_run: bool) -> bool:
     status = state.stages[stage].status
     return status == "done" or (dry_run and status == "dry_run")
+
+
+def _validate_queued_request_identity(
+    state: StoryState, expected: dict[str, str]
+) -> None:
+    """Bind a dry-run download plan to the exact generation plan persisted in state."""
+    queued_request = state.stages["video_queued"].verification.get("request")
+    if not isinstance(queued_request, dict):
+        raise TypeError("queued NotebookLM request identity is required before dry-run download")
+    for key, value in expected.items():
+        if queued_request.get(key) != value:
+            raise ValueError(f"queued generation {key} does not match current story")
 
 
 def run_stage(state: StoryState, stage: str, cfg: Config, dry_run: bool = False) -> None:
@@ -141,6 +152,18 @@ def _execute_stage(state: StoryState, stage: str, cfg: Config, dry_run: bool = F
         request_token = str(src.get("request_token") or generation_request_id)
         expected_format = str(src.get("expected_format") or "Short")
 
+        if dry_run:
+            _validate_queued_request_identity(
+                state,
+                {
+                    "request_id": generation_request_id,
+                    "story_id": state.story_id,
+                    "request_token": request_token,
+                    "notebook_url": str(src["notebook_url"]),
+                    "artifact_title": str(src["artifact_title"]),
+                },
+            )
+
         # Validate required adapters/assets before expensive download/handoff/ffmpeg work.
         # A real run must also be bound to the exact generation receipt that queued it.
         if not dry_run:
@@ -196,14 +219,6 @@ def _execute_stage(state: StoryState, stage: str, cfg: Config, dry_run: bool = F
         result["request"] = request
         if not dry_run:
             expected_req_id = f"notebooklm-{state.story_id}"
-            artifact = ingest_download_receipt(
-                receipt_path,
-                allow_root=cfg.notebooklm_output_root,
-                expected_request_id=expected_req_id,
-                expected_story_id=state.story_id,
-                expected_request_token=request_token,
-                expected_video_format=expected_format,
-            )
             # A fresh deployment may not have produced a content package yet. Establish
             # the configured trusted root before the symlink-resistant handoff helper
             # opens and pins it; the helper still rejects a symlink at this path.
@@ -222,6 +237,7 @@ def _execute_stage(state: StoryState, stage: str, cfg: Config, dry_run: bool = F
                 expected_artifact_title=str(src["artifact_title"]),
                 ffprobe_bin=cfg.ffprobe_bin,
             )
+            artifact = handoff.pop("verified_artifact")
             final_video = handoff_root / "final-with-branded-outro.mp4"
             outro = append_branded_outro_preserve_audio(
                 Path(handoff["video_path"]),

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -78,6 +79,8 @@ def ingest_generation_receipt(
     request_id: str,
     story_id: str,
     request_token: str,
+    request_path: Path | None = None,
+    allow_root: Path | None = None,
 ) -> dict[str, Any]:
     if not path.is_file():
         raise FileNotFoundError(f"notebook generation receipt not found: {path}")
@@ -93,6 +96,25 @@ def ingest_generation_receipt(
     for key, value in expected.items():
         if receipt[key] != value:
             raise ValueError(f"notebook generation receipt {key} does not match request")
+
+    evidence = receipt["evidence"]
+    if request_path is not None:
+        if not request_path.is_file():
+            raise FileNotFoundError(f"notebook generation request not found: {request_path}")
+        recorded_path = evidence.get("request_path")
+        if not isinstance(recorded_path, str) or not Path(recorded_path).is_absolute():
+            raise ValueError("notebook generation receipt request_path does not match request")
+        if Path(recorded_path).resolve() != request_path.resolve():
+            raise ValueError("notebook generation receipt request_path does not match request")
+        request_sha256 = hashlib.sha256(request_path.read_bytes()).hexdigest()
+        if evidence.get("request_sha256") != request_sha256:
+            raise ValueError("notebook generation receipt request_sha256 does not match request")
+    if allow_root is not None:
+        recorded_root = evidence.get("allow_root")
+        if not isinstance(recorded_root, str) or not Path(recorded_root).is_absolute():
+            raise ValueError("notebook generation receipt allow_root does not match request")
+        if Path(recorded_root).resolve() != allow_root.resolve():
+            raise ValueError("notebook generation receipt allow_root does not match request")
     return receipt
 
 

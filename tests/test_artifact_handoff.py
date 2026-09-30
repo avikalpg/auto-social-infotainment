@@ -9,6 +9,7 @@ from unittest.mock import Mock, patch
 
 from workflow_automation.handoff import handoff_notebooklm_video
 from workflow_automation.media import (
+    _verify_audio_start_timeline,
     append_branded_outro_preserve_audio,
     canonical_pcm_sha256,
     ffprobe_validate,
@@ -99,6 +100,34 @@ def make_silent_source_video(path: Path) -> None:
 
 
 class CanonicalPcmHashTests(unittest.TestCase):
+    def test_audio_timeline_rejects_shifted_start_and_av_offset(self):
+        original = {
+            "streams": [
+                {"codec_type": "video", "start_time": "0.000"},
+                {"codec_type": "audio", "start_time": "0.020"},
+            ],
+            "format": {},
+        }
+        shifted_audio = {
+            "streams": [
+                {"codec_type": "video", "start_time": "0.000"},
+                {"codec_type": "audio", "start_time": "0.200"},
+            ],
+            "format": {},
+        }
+        shifted_video = {
+            "streams": [
+                {"codec_type": "video", "start_time": "0.200"},
+                {"codec_type": "audio", "start_time": "0.020"},
+            ],
+            "format": {},
+        }
+
+        with self.assertRaisesRegex(ValueError, "audio start time"):
+            _verify_audio_start_timeline(original, shifted_audio, 0.05)
+        with self.assertRaisesRegex(ValueError, "audio/video start offset"):
+            _verify_audio_start_timeline(original, shifted_video, 0.05)
+
     def test_hashes_ffmpeg_output_in_bounded_chunks(self):
         chunks = [b"first chunk", b"second chunk"]
 
@@ -222,6 +251,16 @@ class ArtifactHandoffTests(unittest.TestCase):
             )
             self.assertEqual(result["audio"]["stream_metadata"]["codec_name"], "aac")
             self.assertTrue(result["timeline"]["silent_outro_verified"])
+            self.assertAlmostEqual(
+                result["timeline"]["source_audio_start_seconds"],
+                result["timeline"]["final_audio_start_seconds"],
+                delta=0.05,
+            )
+            self.assertAlmostEqual(
+                result["timeline"]["source_audio_video_offset_seconds"],
+                result["timeline"]["final_audio_video_offset_seconds"],
+                delta=0.05,
+            )
             self.assertGreater(
                 result["timeline"]["final_video_seconds"],
                 result["timeline"]["final_audio_seconds"],
@@ -355,6 +394,19 @@ class ArtifactHandoffTests(unittest.TestCase):
             }
             receipt_path = req_dir / "STR-009.receipt.json"
             receipt_path.write_text(json.dumps(receipt))
+            generation_request_path = req_dir / "STR-009.generation.request.json"
+            generation_request_path.write_text(
+                json.dumps(
+                    {
+                        "request_id": "notebooklm-generation-STR-009",
+                        "story_id": "STR-009",
+                        "request_token": "notebooklm-generation-STR-009",
+                        "notebook_url": "https://notebook.google.com/notebook/test-1",
+                        "artifact_title": "Test Title",
+                        "focus_prompt": "Focus on the test.",
+                    }
+                )
+            )
             generation_receipt_path = req_dir / "STR-009.generation.receipt.json"
             generation_receipt_path.write_text(
                 json.dumps(
@@ -372,6 +424,11 @@ class ArtifactHandoffTests(unittest.TestCase):
                             "generation_only": True,
                             "download_attempted": False,
                             "generation_state": "queued",
+                            "request_path": str(generation_request_path.resolve()),
+                            "request_sha256": hashlib.sha256(
+                                generation_request_path.read_bytes()
+                            ).hexdigest(),
+                            "allow_root": str(req_dir),
                         },
                     }
                 )

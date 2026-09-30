@@ -8,6 +8,7 @@
  */
 import fs from 'node:fs/promises';
 import { constants as fsConstants } from 'node:fs';
+import crypto from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -406,11 +407,13 @@ async function main() {
   const requestFile = process.argv[2];
   if (!requestFile) throw new Error('usage: hp-notebooklm-generation-worker.mjs REQUEST.json');
 
-  const raw = JSON.parse(await fs.readFile(requestFile, 'utf8'));
+  const requestBytes = await fs.readFile(requestFile);
+  const raw = JSON.parse(requestBytes.toString('utf8'));
   const parsed = validateRequest(raw);
   const request = { ...parsed, receipt_path: await assertRealContained(parsed.receipt_path, parsed.allow_root) };
   const baseEvidence = {
     request_path: path.resolve(requestFile),
+    request_sha256: crypto.createHash('sha256').update(requestBytes).digest('hex'),
     allow_root: request.allow_root,
     cdp_url: request.cdp_url,
     generation_only: true,

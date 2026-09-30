@@ -212,6 +212,7 @@ def validate_notebook_generation_receipt(data: dict[str, Any]) -> None:
         evidence,
         {
             "request_path",
+            "request_sha256",
             "allow_root",
             "cdp_url",
             "generation_only",
@@ -229,6 +230,16 @@ def validate_notebook_generation_receipt(data: dict[str, Any]) -> None:
         ):
             raise ValueError(
                 f"notebook generation receipt evidence {key} must be a non-empty string"
+            )
+    if "request_sha256" in evidence:
+        request_sha256 = evidence["request_sha256"]
+        if (
+            not isinstance(request_sha256, str)
+            or len(request_sha256) != 64
+            or any(character not in "0123456789abcdef" for character in request_sha256.lower())
+        ):
+            raise ValueError(
+                "notebook generation receipt evidence request_sha256 must be a SHA-256 hex digest"
             )
     for key in ("generation_only", "download_attempted", "page_reused", "already_queued"):
         if key in evidence and not isinstance(evidence[key], bool):

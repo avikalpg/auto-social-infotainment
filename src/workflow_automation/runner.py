@@ -126,6 +126,8 @@ def _execute_stage(state: StoryState, stage: str, cfg: Config, dry_run: bool = F
                 request_id=request_id,
                 story_id=state.story_id,
                 request_token=request_token,
+                request_path=request_path,
+                allow_root=cfg.notebooklm_request_dir,
             )
             if receipt["artifact_title"] != src["artifact_title"]:
                 raise ValueError("notebook generation receipt artifact_title does not match request")
@@ -184,6 +186,11 @@ def _execute_stage(state: StoryState, stage: str, cfg: Config, dry_run: bool = F
                 request_id=generation_request_id,
                 story_id=state.story_id,
                 request_token=request_token,
+                request_path=(
+                    cfg.notebooklm_request_dir
+                    / f"{state.story_id}.generation.request.json"
+                ),
+                allow_root=cfg.notebooklm_request_dir,
             )
             if generation_receipt["artifact_title"] != src["artifact_title"]:
                 raise ValueError("queued generation artifact_title does not match current story")

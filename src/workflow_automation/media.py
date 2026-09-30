@@ -321,6 +321,40 @@ def _frame_duration(stream: dict[str, object]) -> float:
     return 1 / rate if rate > 0 else 1 / 30
 
 
+def _stream_start_time(media: dict[str, Any], codec_type: str) -> float:
+    stream = next(item for item in media["streams"] if item.get("codec_type") == codec_type)
+    value = stream.get("start_time")
+    if value in (None, "N/A"):
+        value = media.get("format", {}).get("start_time")
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"{codec_type} stream start_time must be numeric") from error
+
+
+def _verify_audio_start_timeline(
+    original_media: dict[str, Any], final_media: dict[str, Any], tolerance: float
+) -> dict[str, float]:
+    source_video_start = _stream_start_time(original_media, "video")
+    source_audio_start = _stream_start_time(original_media, "audio")
+    final_video_start = _stream_start_time(final_media, "video")
+    final_audio_start = _stream_start_time(final_media, "audio")
+    if abs(final_audio_start - source_audio_start) > tolerance:
+        raise ValueError("final audio start time changed while appending the branded outro")
+    source_audio_video_offset = source_audio_start - source_video_start
+    final_audio_video_offset = final_audio_start - final_video_start
+    if abs(final_audio_video_offset - source_audio_video_offset) > tolerance:
+        raise ValueError("final audio/video start offset changed while appending the branded outro")
+    return {
+        "source_video_start_seconds": source_video_start,
+        "source_audio_start_seconds": source_audio_start,
+        "final_video_start_seconds": final_video_start,
+        "final_audio_start_seconds": final_audio_start,
+        "source_audio_video_offset_seconds": source_audio_video_offset,
+        "final_audio_video_offset_seconds": final_audio_video_offset,
+    }
+
+
 def append_branded_outro_preserve_audio(
     original_video: Path,
     branded_outro_visual: Path,
@@ -424,11 +458,15 @@ def append_branded_outro_preserve_audio(
         final_video_duration = _stream_duration(media, "video")
         final_audio_duration = _stream_duration(media, "audio")
         video_tolerance = max(0.1, 2 * _frame_duration(original_video_stream))
+        audio_start_tolerance = max(0.05, _frame_duration(original_video_stream))
         expected_video_duration = source_video_duration + outro_video_duration
         if abs(final_video_duration - expected_video_duration) > video_tolerance:
             raise ValueError("final video duration does not include the complete branded outro")
         if abs(final_audio_duration - source_audio_duration) > 0.05:
             raise ValueError("final audio duration changed while appending the branded outro")
+        timeline_starts = _verify_audio_start_timeline(
+            original_media, media, audio_start_tolerance
+        )
         if final_video_duration <= final_audio_duration:
             raise ValueError("branded outro must extend video beyond the preserved audio stream")
         timeline = {
@@ -437,6 +475,7 @@ def append_branded_outro_preserve_audio(
             "outro_video_seconds": outro_video_duration,
             "final_video_seconds": final_video_duration,
             "final_audio_seconds": final_audio_duration,
+            **timeline_starts,
             "silent_outro_verified": True,
         }
         tmp.replace(output_video)

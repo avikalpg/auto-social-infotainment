@@ -1,3 +1,4 @@
+import hashlib
 import json
 import tempfile
 import unittest
@@ -256,8 +257,10 @@ class CaptionWorkflowTests(unittest.TestCase):
             request_dir.mkdir()
             worker = root / "generation_worker.py"
             worker.write_text(
-                "import json, pathlib, sys\n"
-                "req = json.loads(pathlib.Path(sys.argv[1]).read_text())\n"
+                "import hashlib, json, pathlib, sys\n"
+                "request_path = pathlib.Path(sys.argv[1])\n"
+                "request_bytes = request_path.read_bytes()\n"
+                "req = json.loads(request_bytes)\n"
                 "receipt = {\n"
                 "  'request_id': req['request_id'], 'story_id': req['story_id'],\n"
                 "  'request_token': req['request_token'], 'status': 'queued',\n"
@@ -265,7 +268,10 @@ class CaptionWorkflowTests(unittest.TestCase):
                 "  'notebook_url': req['notebook_url'], 'video_format': 'Short',\n"
                 "  'timestamp': '2026-09-27T00:00:00Z',\n"
                 "  'evidence': {'generation_only': True, 'download_attempted': False,\n"
-                "               'generation_state': 'queued'}\n"
+                "               'generation_state': 'queued',\n"
+                "               'request_path': str(request_path.resolve()),\n"
+                "               'request_sha256': hashlib.sha256(request_bytes).hexdigest(),\n"
+                "               'allow_root': req['allow_root']}\n"
                 "}\n"
                 "pathlib.Path(req['receipt_path']).write_text(json.dumps(receipt))\n"
             )
@@ -367,6 +373,8 @@ class CaptionWorkflowTests(unittest.TestCase):
             output_root.mkdir()
             outro = root / "outro.mp4"
             outro.write_bytes(b"placeholder")
+            request_path = request_dir / "STR-014.generation.request.json"
+            request_path.write_text(json.dumps({"artifact_title": "Edited title"}))
             receipt_path = request_dir / "STR-014.generation.receipt.json"
             receipt_path.write_text(
                 json.dumps(
@@ -384,6 +392,9 @@ class CaptionWorkflowTests(unittest.TestCase):
                             "generation_only": True,
                             "download_attempted": False,
                             "generation_state": "queued",
+                            "request_path": str(request_path.resolve()),
+                            "request_sha256": hashlib.sha256(request_path.read_bytes()).hexdigest(),
+                            "allow_root": str(request_dir),
                         },
                     }
                 )

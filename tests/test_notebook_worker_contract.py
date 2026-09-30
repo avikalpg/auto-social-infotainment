@@ -655,6 +655,7 @@ class NotebookWorkerContractTests(unittest.TestCase):
             ("page_reused", "yes"),
             ("already_queued", 1),
             ("request_path", {}),
+            ("request_sha256", "not-a-sha256"),
             ("allow_root", []),
             ("cdp_url", True),
             ("confirmation", False),
@@ -713,6 +714,102 @@ class NotebookWorkerContractTests(unittest.TestCase):
                     request_id="r1",
                     story_id="s1",
                     request_token="tok",
+                )
+
+    def test_generation_receipt_is_bound_to_exact_request_file_and_root(self):
+        from workflow_automation.notebook import ingest_generation_receipt
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            request_path = root / "generation.request.json"
+            request_path.write_text(
+                json.dumps(
+                    {
+                        "request_id": "r1",
+                        "story_id": "s1",
+                        "request_token": "tok",
+                        "focus_prompt": "Original focus",
+                    }
+                )
+            )
+            receipt = {
+                "schema_version": 1,
+                "request_id": "r1",
+                "story_id": "s1",
+                "request_token": "tok",
+                "status": "queued",
+                "artifact_title": "Short overview",
+                "notebook_url": "https://notebook.google.com/notebook/example",
+                "video_format": "Short",
+                "timestamp": "2026-09-30T16:00:00Z",
+                "evidence": {
+                    "request_path": str(request_path.resolve()),
+                    "request_sha256": hashlib.sha256(request_path.read_bytes()).hexdigest(),
+                    "allow_root": str(root.resolve()),
+                    "generation_only": True,
+                    "download_attempted": False,
+                    "generation_state": "queued",
+                },
+            }
+            receipt_path = root / "generation.receipt.json"
+            receipt_path.write_text(json.dumps(receipt))
+
+            accepted = ingest_generation_receipt(
+                receipt_path,
+                request_id="r1",
+                story_id="s1",
+                request_token="tok",
+                request_path=request_path,
+                allow_root=root,
+            )
+            self.assertEqual(accepted["artifact_title"], "Short overview")
+
+            request_path.write_text(
+                json.dumps(
+                    {
+                        "request_id": "r1",
+                        "story_id": "s1",
+                        "request_token": "tok",
+                        "focus_prompt": "Changed focus",
+                    }
+                )
+            )
+            with self.assertRaisesRegex(ValueError, "request_sha256"):
+                ingest_generation_receipt(
+                    receipt_path,
+                    request_id="r1",
+                    story_id="s1",
+                    request_token="tok",
+                    request_path=request_path,
+                    allow_root=root,
+                )
+
+            receipt["evidence"]["request_sha256"] = hashlib.sha256(
+                request_path.read_bytes()
+            ).hexdigest()
+            receipt["evidence"]["request_path"] = str(root / "other.request.json")
+            receipt_path.write_text(json.dumps(receipt))
+            with self.assertRaisesRegex(ValueError, "request_path"):
+                ingest_generation_receipt(
+                    receipt_path,
+                    request_id="r1",
+                    story_id="s1",
+                    request_token="tok",
+                    request_path=request_path,
+                    allow_root=root,
+                )
+
+            receipt["evidence"]["request_path"] = str(request_path.resolve())
+            receipt["evidence"]["allow_root"] = str(root / "different-root")
+            receipt_path.write_text(json.dumps(receipt))
+            with self.assertRaisesRegex(ValueError, "allow_root"):
+                ingest_generation_receipt(
+                    receipt_path,
+                    request_id="r1",
+                    story_id="s1",
+                    request_token="tok",
+                    request_path=request_path,
+                    allow_root=root,
                 )
 
     def test_receipt_contracts_reject_unsupported_fields(self):

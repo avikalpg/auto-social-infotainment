@@ -666,6 +666,16 @@ class NotebookWorkerContractTests(unittest.TestCase):
             with self.subTest(evidence=key), self.assertRaisesRegex(ValueError, key):
                 validate_notebook_generation_receipt(mutation)
 
+        for cdp_url in (
+            "not-a-url",
+            "ws://127.0.0.1:9222",
+            "http://user:password@127.0.0.1:9222",
+        ):
+            mutation = dict(receipt)
+            mutation["evidence"] = {**receipt["evidence"], "cdp_url": cdp_url}
+            with self.subTest(cdp_url=cdp_url), self.assertRaisesRegex(ValueError, "cdp_url"):
+                validate_notebook_generation_receipt(mutation)
+
     def test_download_request_rejects_unknown_keys_before_processing_paths(self):
         from workflow_automation.contracts import validate_notebook_request
 

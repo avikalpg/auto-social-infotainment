@@ -27,6 +27,11 @@ CMD_STAGE = {
 }
 
 
+def _add_subcommand_dry_run(parser: argparse.ArgumentParser) -> None:
+    """Accept --dry-run after a subcommand without overriding the global option."""
+    parser.add_argument("--dry-run", action="store_true", default=argparse.SUPPRESS)
+
+
 def _hydrate_notebook_source(cfg: Config, story: dict[str, object]) -> dict[str, object]:
     """Inherit source-level NotebookLM metadata without copying it into every story."""
     hydrated = dict(story)
@@ -256,6 +261,7 @@ def main(argv: list[str] | None = None) -> int:
         help="Run configured source extractor and write pending main_character/primary_tension candidate pairs",
     )
     sp.add_argument("--source-id", required=True)
+    _add_subcommand_dry_run(sp)
     sp = sub.add_parser(
         "approve-candidate-pairs",
         help="Human-approve extracted candidate pairs and atomically append them to stories tracker",
@@ -264,10 +270,12 @@ def main(argv: list[str] | None = None) -> int:
     for c in CMD_STAGE:
         sp = sub.add_parser(c)
         sp.add_argument("--story-id")
+        _add_subcommand_dry_run(sp)
     sp = sub.add_parser("status")
     sp.add_argument("--story-id")
     sp = sub.add_parser("resume")
     sp.add_argument("--story-id")
+    _add_subcommand_dry_run(sp)
     args = p.parse_args(argv)
     configure(args.verbose)
     cfg = Config.load(args.config)

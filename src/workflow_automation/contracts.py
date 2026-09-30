@@ -231,6 +231,10 @@ def validate_notebook_generation_receipt(data: dict[str, Any]) -> None:
             raise ValueError(
                 f"notebook generation receipt evidence {key} must be a non-empty string"
             )
+    if "cdp_url" in evidence:
+        _validate_http_url(
+            evidence["cdp_url"], "notebook generation receipt evidence cdp_url"
+        )
     if "request_sha256" in evidence:
         request_sha256 = evidence["request_sha256"]
         if (

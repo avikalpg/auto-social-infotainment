@@ -473,6 +473,8 @@ def validate_notebook_receipt(data: dict[str, Any], *, allow_root: Path | str) -
         },
         "notebook download receipt evidence",
     )
+    if "local_worker" in evidence and not isinstance(evidence["local_worker"], bool):
+        raise ValueError("notebook download receipt evidence local_worker must be boolean")
 
 
 def validate_notebook_receipt_containment(data: dict[str, Any], allow_root: Path | str) -> Path:

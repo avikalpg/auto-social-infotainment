@@ -258,6 +258,11 @@ class NotebookWorkerContractTests(unittest.TestCase):
                 "evidence": {"local_worker": True},
             }
             validate_notebook_receipt(receipt, allow_root=root)
+            invalid_evidence = dict(receipt["evidence"], local_worker="yes")
+            with self.assertRaisesRegex(ValueError, "local_worker must be boolean"):
+                validate_notebook_receipt(
+                    dict(receipt, evidence=invalid_evidence), allow_root=root
+                )
             for key, value in (
                 ("request_id", 1),
                 ("story_id", " "),

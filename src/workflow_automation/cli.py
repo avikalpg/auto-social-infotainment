@@ -36,10 +36,16 @@ def _hydrate_notebook_source(cfg: Config, story: dict[str, object]) -> dict[str,
     """Inherit source-level NotebookLM metadata without copying it into every story."""
     hydrated = dict(story)
     source_id = hydrated.get("source_id")
-    if source_id and not hydrated.get("notebook_url"):
+    if source_id:
         source = find_source(cfg.sources_path, str(source_id))
-        if source.get("notebook_url"):
-            hydrated["notebook_url"] = source["notebook_url"]
+        source_notebook_url = source.get("notebook_url")
+        story_notebook_url = hydrated.get("notebook_url")
+        if source_notebook_url and story_notebook_url and story_notebook_url != source_notebook_url:
+            raise ValueError(
+                "story notebook_url conflicts with canonical source notebook_url"
+            )
+        if source_notebook_url:
+            hydrated["notebook_url"] = source_notebook_url
     return hydrated
 
 
@@ -187,67 +193,66 @@ def status(args: argparse.Namespace, cfg: Config) -> int:
 
 def resume(args: argparse.Namespace, cfg: Config) -> int:
     store = StateStore(cfg.state_dir)
-    st = load_or_create(store, cfg, args.story_id)
-    for stage in STAGES:
-        if not stage_satisfies_prerequisite(st, stage, args.dry_run):
-            if args.dry_run and stage.endswith("_published"):
-                # load_or_create() may have hydrated source metadata. Persist that canonical
-                # state under the workflow lock before ending the multi-stage dry-run.
-                with FileLock(cfg.lock_path):
-                    st = load_or_create(store, cfg, st.story_id)
+    try:
+        with FileLock(cfg.lock_path):
+            st = load_or_create(store, cfg, args.story_id)
+            for stage in STAGES:
+                if stage_satisfies_prerequisite(st, stage, args.dry_run):
+                    continue
+                if args.dry_run and stage.endswith("_published"):
+                    # Persist source hydration before ending the multi-stage dry-run.
                     store.save(st)
-                print(
-                    json.dumps(
-                        {
-                            "story_id": st.story_id,
-                            "status": "dry_run_complete",
-                            "next_stage": stage,
-                            "publication_simulated": False,
-                        }
-                    )
-                )
-                return ExitCode.OK
-            if stage == "extracted":
-                errors = cfg.validate()
-                if errors:
-                    print(json.dumps({"errors": errors}), file=sys.stderr)
-                    return ExitCode.CONFIG
-                try:
-                    with FileLock(cfg.lock_path):
-                        try:
-                            # Reload while holding the lock so a concurrent command cannot leave
-                            # the canonical first stage pending after resume returns successfully.
-                            st = load_or_create(store, cfg, st.story_id)
-                            run_stage(st, stage, cfg, args.dry_run)
-                            store.save(st)
-                        except Exception as error:
-                            st.stages[stage].status = "failed"
-                            st.stages[stage].error = str(error)
-                            st.stages[stage].updated_at = utcnow()
-                            store.save(st)
-                            raise
                     print(
                         json.dumps(
                             {
                                 "story_id": st.story_id,
-                                "stage": stage,
-                                "status": st.stages[stage].status,
+                                "status": "dry_run_complete",
+                                "next_stage": stage,
+                                "publication_simulated": False,
                             }
                         )
                     )
                     return ExitCode.OK
-                except LockError as e:
-                    print(str(e), file=sys.stderr)
-                    return ExitCode.LOCKED
-                except Exception:
-                    LOG.exception("stage failed", extra={"stage": stage})
-                    return ExitCode.SUBPROCESS
-            args.command = next(k for k, v in CMD_STAGE.items() if v == stage)
-            args.story_id = st.story_id
-            return command_stage(args, cfg)
-    completion_status = "dry_run_complete" if args.dry_run else "complete"
-    print(json.dumps({"story_id": st.story_id, "status": completion_status}))
-    return 0
+
+                errors = (
+                    cfg.validate()
+                    if stage == "extracted"
+                    else cfg.validate(stage=stage, dry_run=args.dry_run)
+                )
+                if errors:
+                    print(json.dumps({"errors": errors}), file=sys.stderr)
+                    return ExitCode.CONFIG
+                try:
+                    run_stage(st, stage, cfg, args.dry_run)
+                    store.save(st)
+                except Exception as error:
+                    st.stages[stage].status = "failed"
+                    st.stages[stage].error = str(error)
+                    st.stages[stage].updated_at = utcnow()
+                    store.save(st)
+                    raise
+                print(
+                    json.dumps(
+                        {
+                            "story_id": st.story_id,
+                            "stage": stage,
+                            "status": st.stages[stage].status,
+                        }
+                    )
+                )
+                return ExitCode.OK
+            completion_status = "dry_run_complete" if args.dry_run else "complete"
+            print(json.dumps({"story_id": st.story_id, "status": completion_status}))
+            return ExitCode.OK
+    except LockError as e:
+        print(str(e), file=sys.stderr)
+        return ExitCode.LOCKED
+    except AdapterNotConfigured as e:
+        print(str(e), file=sys.stderr)
+        return ExitCode.ADAPTER_NOT_CONFIGURED
+    except Exception:
+        LOG.exception("stage failed", extra={"stage": locals().get("stage")})
+        return ExitCode.SUBPROCESS
 
 
 def main(argv: list[str] | None = None) -> int:

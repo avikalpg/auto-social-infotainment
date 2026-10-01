@@ -40,6 +40,31 @@ class StateTrackerTests(unittest.TestCase):
             )
             self.assertEqual(story["notebook_url"], "https://notebook.google.com/notebook/example")
 
+    def test_hydrate_rejects_stale_notebook_url_in_existing_state(self):
+        with tempfile.TemporaryDirectory() as d:
+            sources = Path(d) / "sources.json"
+            sources.write_text(
+                json.dumps(
+                    {
+                        "sources": [
+                            {
+                                "id": "SRC-003",
+                                "notebook_url": "https://notebook.google.com/notebook/current",
+                            }
+                        ]
+                    }
+                )
+            )
+            with self.assertRaisesRegex(ValueError, "conflicts with canonical source"):
+                _hydrate_notebook_source(
+                    SimpleNamespace(sources_path=sources),
+                    {
+                        "id": "STR-008",
+                        "source_id": "SRC-003",
+                        "notebook_url": "https://notebook.google.com/notebook/stale",
+                    },
+                )
+
     def test_state_atomic_save_backup(self):
         with tempfile.TemporaryDirectory() as d:
             tmp_path = Path(d)
@@ -164,14 +189,43 @@ class StateTrackerTests(unittest.TestCase):
             state.stages["extracted"].status = "dry_run"
             state.stages["video_queued"].status = "dry_run"
             store.save(state)
-            cfg = SimpleNamespace(state_dir=store.state_dir)
+            cfg = SimpleNamespace(
+                state_dir=store.state_dir,
+                lock_path=root / "workflow.lock",
+                validate=lambda **_kwargs: [],
+            )
             args = SimpleNamespace(story_id=state.story_id, dry_run=True)
 
-            with patch("workflow_automation.cli.command_stage", return_value=0) as command:
+            with patch("workflow_automation.cli.run_stage") as run:
                 self.assertEqual(resume(args, cfg), 0)
 
-            self.assertEqual(args.command, "produce-video")
-            command.assert_called_once_with(args, cfg)
+            run.assert_called_once()
+            self.assertEqual(run.call_args.args[1:], ("video_produced", cfg, True))
+            self.assertFalse(cfg.lock_path.exists())
+
+    def test_resume_loads_and_selects_stage_while_lock_is_held(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            store = StateStore(root / "state")
+            state = StoryState("story-locked-load")
+            store.save(state)
+            cfg = SimpleNamespace(
+                state_dir=store.state_dir,
+                lock_path=root / "workflow.lock",
+                max_retries=3,
+                validate=list,
+            )
+            args = SimpleNamespace(story_id=state.story_id, dry_run=False)
+            original_load = StateStore.load
+
+            def load_while_locked(current_store, story_id):
+                self.assertTrue(cfg.lock_path.exists())
+                return original_load(current_store, story_id)
+
+            with patch.object(
+                StateStore, "load", autospec=True, side_effect=load_while_locked
+            ), redirect_stdout(StringIO()):
+                self.assertEqual(resume(args, cfg), 0)
 
     def test_resume_dry_run_stops_before_publication(self):
         with tempfile.TemporaryDirectory() as d:
@@ -257,6 +311,54 @@ class StateTrackerTests(unittest.TestCase):
             state.stages["instagram_published"].verification,
             {"dry_run": True, "command": None},
         )
+
+    def test_publication_requires_and_revalidates_canonical_content_package(self):
+        from workflow_automation.runner import run_stage
+
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            package_dir = root / "content" / "story-001"
+            package_dir.mkdir(parents=True)
+            cfg = SimpleNamespace(
+                instagram_cmd=("publisher",),
+                content_root=root / "content",
+                ffprobe_bin="ffprobe",
+                max_retries=3,
+            )
+            state = StoryState("story-001")
+
+            with patch("workflow_automation.runner.CommandAdapter.run") as publish:
+                with self.assertRaisesRegex(RuntimeError, "video_produced must be done"):
+                    run_stage(state, "instagram_published", cfg)
+                publish.assert_not_called()
+
+            state.stages["video_produced"].status = "done"
+            state.artifacts["package_dir"] = str(package_dir)
+            manifest = {
+                "story_id": state.story_id,
+                "sha256": {"final_video": "a" * 64},
+            }
+            with (
+                patch(
+                    "workflow_automation.runner.validate_content_package",
+                    return_value=manifest,
+                ) as validate,
+                patch(
+                    "workflow_automation.runner.CommandAdapter.run",
+                    return_value={"returncode": 0},
+                ) as publish,
+            ):
+                run_stage(state, "instagram_published", cfg)
+
+            validate.assert_called_once_with(package_dir.resolve(), "ffprobe")
+            publish.assert_called_once()
+            self.assertEqual(state.stages["instagram_published"].status, "done")
+            self.assertEqual(
+                state.stages["instagram_published"].verification["content_package"][
+                    "manifest_sha256"
+                ],
+                "a" * 64,
+            )
 
     def test_approve_candidate_pairs_validates_config_before_mutating(self):
         from workflow_automation.errors import ExitCode

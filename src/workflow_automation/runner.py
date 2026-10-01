@@ -81,6 +81,35 @@ def _resolve_notebook_output_path(value: object, output_root: Path) -> Path:
     return resolved
 
 
+def _validate_publication_package(
+    state: StoryState, cfg: Config
+) -> tuple[Path, dict[str, object]]:
+    """Require the canonical, verified package before any production publication."""
+    if state.stages["video_produced"].status != "done":
+        raise RuntimeError("video_produced must be done before publication")
+    raw_package_dir = state.artifacts.get("package_dir")
+    if not raw_package_dir:
+        raise RuntimeError("content package is required before publication")
+
+    package_dir = Path(raw_package_dir).expanduser()
+    if not package_dir.is_absolute():
+        raise RuntimeError("content package path must be absolute")
+    try:
+        resolved_package = package_dir.resolve(strict=True)
+        expected_package = (cfg.content_root.resolve(strict=True) / state.story_id).resolve(
+            strict=True
+        )
+    except FileNotFoundError as error:
+        raise RuntimeError("content package does not exist") from error
+    if resolved_package != expected_package or not resolved_package.is_dir():
+        raise RuntimeError("content package path does not match the configured story package")
+
+    manifest = validate_content_package(resolved_package, cfg.ffprobe_bin)
+    if manifest.get("story_id") != state.story_id:
+        raise ValueError("content package story_id does not match workflow state")
+    return resolved_package, manifest
+
+
 def run_stage(state: StoryState, stage: str, cfg: Config, dry_run: bool = False) -> None:
     rec = state.stages[stage]
     if rec.status == "done":
@@ -348,7 +377,16 @@ def _execute_stage(state: StoryState, stage: str, cfg: Config, dry_run: bool = F
                 raise RuntimeError("audio integrity verification failed")
         mark_done(state, stage, result)
         return
+    package_verification: dict[str, object] | None = None
+    if not dry_run:
+        package_dir, manifest = _validate_publication_package(state, cfg)
+        package_verification = {
+            "path": str(package_dir),
+            "manifest_sha256": manifest["sha256"]["final_video"],
+        }
     result = CommandAdapter(stage, getattr(cfg, STAGE_TO_ADAPTER[stage])).run(
         ["publish", "--story-id", state.story_id], dry_run
     )
+    if package_verification is not None:
+        result["content_package"] = package_verification
     mark_done(state, stage, result)

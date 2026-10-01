@@ -287,6 +287,7 @@ def _execute_stage(state: StoryState, stage: str, cfg: Config, dry_run: bool = F
                 allowed_output_root=cfg.notebooklm_output_root,
                 handoff_root=handoff_root,
                 allowed_handoff_root=cfg.content_root,
+                allowed_receipt_root=cfg.notebooklm_request_dir,
                 expected_request_id=expected_req_id,
                 expected_story_id=state.story_id,
                 expected_request_token=request_token,

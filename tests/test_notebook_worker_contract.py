@@ -823,6 +823,89 @@ class NotebookWorkerContractTests(unittest.TestCase):
                     allow_root=root,
                 )
 
+    def test_receipt_and_generation_request_reads_reject_symlinks(self):
+        from workflow_automation.notebook import (
+            ingest_generation_receipt,
+            parse_download_receipt,
+        )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            generation_request = root / "generation.request.json"
+            real_generation_request = root / "real-generation.request.json"
+            real_generation_request.write_text('{"focus_prompt":"pinned"}')
+            generation_request.symlink_to(real_generation_request)
+            generation_receipt = {
+                "schema_version": 1,
+                "request_id": "r1",
+                "story_id": "s1",
+                "request_token": "tok",
+                "status": "queued",
+                "artifact_title": "Short overview",
+                "notebook_url": "https://notebook.google.com/notebook/example",
+                "video_format": "Short",
+                "timestamp": "2026-10-01T00:00:00Z",
+                "evidence": {
+                    "request_path": str(generation_request),
+                    "request_sha256": hashlib.sha256(
+                        real_generation_request.read_bytes()
+                    ).hexdigest(),
+                    "allow_root": str(root),
+                    "generation_only": True,
+                    "download_attempted": False,
+                    "generation_state": "queued",
+                },
+            }
+            generation_receipt_path = root / "generation.receipt.json"
+            generation_receipt_path.write_text(json.dumps(generation_receipt))
+            linked_generation_receipt = root / "linked-generation.receipt.json"
+            linked_generation_receipt.symlink_to(generation_receipt_path)
+            with self.assertRaisesRegex(ValueError, "without symlinks"):
+                ingest_generation_receipt(
+                    linked_generation_receipt,
+                    request_id="r1",
+                    story_id="s1",
+                    request_token="tok",
+                    allow_root=root,
+                )
+            with self.assertRaisesRegex(ValueError, "without symlinks"):
+                ingest_generation_receipt(
+                    generation_receipt_path,
+                    request_id="r1",
+                    story_id="s1",
+                    request_token="tok",
+                    request_path=generation_request,
+                    allow_root=root,
+                )
+
+            download_receipt = {
+                "schema_version": 1,
+                "request_id": "r1",
+                "story_id": "s1",
+                "status": "done",
+                "timestamp": "2026-10-01T00:00:00Z",
+                "output_path": str(root / "video.mp4"),
+                "artifact": {
+                    "size_bytes": 1,
+                    "container": "mp4",
+                    "duration_seconds": 1,
+                    "dimensions": {"width": 1, "height": 1},
+                    "codecs": {"video": "h264", "audio": None},
+                    "sha256": "a" * 64,
+                },
+                "evidence": {"local_worker": True},
+            }
+            real_download_receipt = root / "real-download.receipt.json"
+            real_download_receipt.write_text(json.dumps(download_receipt))
+            linked_download_receipt = root / "download.receipt.json"
+            linked_download_receipt.symlink_to(real_download_receipt)
+            with self.assertRaisesRegex(ValueError, "without symlinks"):
+                parse_download_receipt(
+                    linked_download_receipt,
+                    allow_root=root,
+                    receipt_root=root,
+                )
+
     def test_receipt_contracts_reject_unsupported_fields(self):
         from workflow_automation.contracts import (
             validate_notebook_generation_receipt,

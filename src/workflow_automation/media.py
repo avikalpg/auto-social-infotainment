@@ -192,7 +192,17 @@ def verify_audio_stream_preserved(
     final_media: dict[str, Any],
     ffmpeg_bin: str = "ffmpeg",
 ) -> dict[str, object]:
-    """Verify stable codec properties and, for AAC/MP4, compressed packet payloads."""
+    """Verify the sole source audio stream and, for AAC/MP4, compressed packets."""
+    original_audio_streams = [
+        stream for stream in original_media["streams"] if stream.get("codec_type") == "audio"
+    ]
+    final_audio_streams = [
+        stream for stream in final_media["streams"] if stream.get("codec_type") == "audio"
+    ]
+    if len(original_audio_streams) != 1:
+        raise ValueError("source video must contain exactly one audio stream")
+    if len(final_audio_streams) != 1:
+        raise ValueError("final video must contain exactly one audio stream")
     original_signature = _audio_stream_signature(original_media)
     final_signature = _audio_stream_signature(final_media)
     if original_signature != final_signature:
@@ -375,8 +385,13 @@ def append_branded_outro_preserve_audio(
     """
     original_media = ffprobe_validate(original_video, ffprobe_bin)
     outro_media = ffprobe_validate(branded_outro_visual, ffprobe_bin)
-    if not any(stream.get("codec_type") == "audio" for stream in original_media["streams"]):
+    source_audio_streams = [
+        stream for stream in original_media["streams"] if stream.get("codec_type") == "audio"
+    ]
+    if not source_audio_streams:
         raise ValueError("source video must contain an audio stream to preserve for branded outro")
+    if len(source_audio_streams) > 1:
+        raise ValueError("source video must contain exactly one audio stream")
     if any(stream.get("codec_type") == "audio" for stream in outro_media["streams"]):
         raise ValueError("branded outro must be a silent visual asset")
     original_video_stream = next(

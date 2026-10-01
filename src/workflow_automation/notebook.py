@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import stat
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +15,81 @@ from .contracts import (
 )
 from .packages import atomic_json
 from .state import utcnow
+
+
+def _read_regular_bytes(
+    path: Path,
+    *,
+    allowed_root: Path | str | None = None,
+    label: str,
+) -> bytes:
+    """Read one pinned regular file without following path-component symlinks."""
+    lexical_path = Path(os.path.abspath(path))
+    if allowed_root is None:
+        lexical_root = lexical_path.parent
+        relative = Path(lexical_path.name)
+    else:
+        lexical_root = Path(os.path.abspath(allowed_root))
+        try:
+            relative = lexical_path.relative_to(lexical_root)
+        except ValueError as error:
+            raise ValueError(f"{label} must be within its trusted root") from error
+        if not relative.parts:
+            raise ValueError(f"{label} must name a regular file")
+
+    root_fd: int | None = None
+    directory_fd: int | None = None
+    file_fd: int | None = None
+    try:
+        root_fd = os.open(lexical_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        directory_fd = os.dup(root_fd)
+        for component in relative.parts[:-1]:
+            next_fd = os.open(
+                component,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                dir_fd=directory_fd,
+            )
+            os.close(directory_fd)
+            directory_fd = next_fd
+        file_fd = os.open(
+            relative.parts[-1], os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory_fd
+        )
+        if not stat.S_ISREG(os.fstat(file_fd).st_mode):
+            raise ValueError(f"{label} must be a regular file")
+        opened_root = Path(f"/proc/self/fd/{root_fd}").resolve()
+        opened_file = Path(f"/proc/self/fd/{file_fd}").resolve()
+        try:
+            opened_file.relative_to(opened_root)
+        except ValueError as error:
+            raise ValueError(f"{label} escaped its trusted root") from error
+        with os.fdopen(file_fd, "rb") as handle:
+            file_fd = None
+            return handle.read()
+    except FileNotFoundError:
+        raise
+    except OSError as error:
+        raise ValueError(f"{label} must be a regular file without symlinks") from error
+    finally:
+        if file_fd is not None:
+            os.close(file_fd)
+        if directory_fd is not None:
+            os.close(directory_fd)
+        if root_fd is not None:
+            os.close(root_fd)
+
+
+def _read_json_object(
+    path: Path,
+    *,
+    allowed_root: Path | str | None = None,
+    label: str,
+) -> dict[str, Any]:
+    data = json.loads(
+        _read_regular_bytes(path, allowed_root=allowed_root, label=label).decode("utf-8")
+    )
+    if not isinstance(data, dict):
+        raise TypeError(f"{label} must contain a JSON object")
+    return data
 
 
 def build_generation_request(
@@ -82,9 +159,14 @@ def ingest_generation_receipt(
     request_path: Path | None = None,
     allow_root: Path | None = None,
 ) -> dict[str, Any]:
-    if not path.is_file():
-        raise FileNotFoundError(f"notebook generation receipt not found: {path}")
-    receipt = json.loads(path.read_text())
+    try:
+        receipt = _read_json_object(
+            path,
+            allowed_root=allow_root,
+            label="notebook generation receipt",
+        )
+    except FileNotFoundError as error:
+        raise FileNotFoundError(f"notebook generation receipt not found: {path}") from error
     validate_notebook_generation_receipt(receipt)
     if receipt["status"] == "error":
         raise RuntimeError("NotebookLM generation worker failed: " + receipt["error"]["message"])
@@ -99,14 +181,22 @@ def ingest_generation_receipt(
 
     evidence = receipt["evidence"]
     if request_path is not None:
-        if not request_path.is_file():
-            raise FileNotFoundError(f"notebook generation request not found: {request_path}")
         recorded_path = evidence.get("request_path")
         if not isinstance(recorded_path, str) or not Path(recorded_path).is_absolute():
             raise ValueError("notebook generation receipt request_path does not match request")
-        if Path(recorded_path).resolve() != request_path.resolve():
+        if Path(os.path.abspath(recorded_path)) != Path(os.path.abspath(request_path)):
             raise ValueError("notebook generation receipt request_path does not match request")
-        request_sha256 = hashlib.sha256(request_path.read_bytes()).hexdigest()
+        try:
+            request_bytes = _read_regular_bytes(
+                request_path,
+                allowed_root=allow_root,
+                label="notebook generation request",
+            )
+        except FileNotFoundError as error:
+            raise FileNotFoundError(
+                f"notebook generation request not found: {request_path}"
+            ) from error
+        request_sha256 = hashlib.sha256(request_bytes).hexdigest()
         if evidence.get("request_sha256") != request_sha256:
             raise ValueError("notebook generation receipt request_sha256 does not match request")
     if allow_root is not None:
@@ -199,23 +289,25 @@ def write_download_request(
     return req
 
 
-def parse_download_receipt(
+def _parse_download_receipt_data(
     path: Path,
     *,
     allow_root: Path | str,
+    receipt_root: Path | str | None = None,
     expected_request_id: str | None = None,
     expected_story_id: str | None = None,
     expected_request_token: str | None = None,
     expected_video_format: str | None = None,
-) -> dict[str, Any]:
-    """Parse and validate receipt structure, identity, and path containment only.
-
-    This function deliberately does not trust the declared artifact metadata. Call
-    ``ingest_download_receipt`` or the handoff API before using the artifact.
-    """
-    if not path.is_file():
-        raise FileNotFoundError(f"notebook download receipt not found: {path}")
-    data = json.loads(path.read_text())
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Read a pinned receipt and return its validated artifact and original data."""
+    try:
+        data = _read_json_object(
+            path,
+            allowed_root=receipt_root,
+            label="notebook download receipt",
+        )
+    except FileNotFoundError as error:
+        raise FileNotFoundError(f"notebook download receipt not found: {path}") from error
     validate_notebook_receipt_containment(data, allow_root)
     if expected_request_id is not None and data.get("request_id") != expected_request_id:
         raise ValueError(
@@ -245,6 +337,29 @@ def parse_download_receipt(
         artifact["request_token"] = data["request_token"]
     if "video_format" in data:
         artifact["video_format"] = data["video_format"]
+    return artifact, data
+
+
+def parse_download_receipt(
+    path: Path,
+    *,
+    allow_root: Path | str,
+    receipt_root: Path | str | None = None,
+    expected_request_id: str | None = None,
+    expected_story_id: str | None = None,
+    expected_request_token: str | None = None,
+    expected_video_format: str | None = None,
+) -> dict[str, Any]:
+    """Parse a pinned receipt and validate its structure, identity, and containment."""
+    artifact, _data = _parse_download_receipt_data(
+        path,
+        allow_root=allow_root,
+        receipt_root=receipt_root,
+        expected_request_id=expected_request_id,
+        expected_story_id=expected_story_id,
+        expected_request_token=expected_request_token,
+        expected_video_format=expected_video_format,
+    )
     return artifact
 
 
@@ -252,6 +367,7 @@ def ingest_download_receipt(
     path: Path,
     *,
     allow_root: Path | str,
+    receipt_root: Path | str | None = None,
     expected_request_id: str | None = None,
     expected_story_id: str | None = None,
     expected_request_token: str | None = None,
@@ -265,6 +381,7 @@ def ingest_download_receipt(
     return verify_download_receipt_artifact(
         path,
         allowed_output_root=Path(allow_root),
+        allowed_receipt_root=Path(receipt_root) if receipt_root is not None else None,
         expected_request_id=expected_request_id,
         expected_story_id=expected_story_id,
         expected_request_token=expected_request_token,

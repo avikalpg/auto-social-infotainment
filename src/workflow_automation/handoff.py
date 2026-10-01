@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from .media import ffprobe_validate, sha256_file
-from .notebook import parse_download_receipt
+from .notebook import _parse_download_receipt_data
 from .state import utcnow
 
 
@@ -94,6 +94,7 @@ def _verified_download_artifact(
     receipt_path: Path,
     *,
     allowed_output_root: Path,
+    allowed_receipt_root: Path | None = None,
     expected_request_id: str | None = None,
     expected_story_id: str | None = None,
     expected_request_token: str | None = None,
@@ -105,15 +106,15 @@ def _verified_download_artifact(
     tuple[dict[str, Any], Path, dict[str, Any], str, dict[str, Any], dict[str, Any]]
 ]:
     """Yield a pinned artifact only after receipt, hash, and media verification."""
-    artifact = parse_download_receipt(
+    artifact, receipt_data = _parse_download_receipt_data(
         receipt_path,
         allow_root=allowed_output_root,
+        receipt_root=allowed_receipt_root,
         expected_request_id=expected_request_id,
         expected_story_id=expected_story_id,
         expected_request_token=expected_request_token,
         expected_video_format=expected_video_format,
     )
-    receipt_data = json.loads(receipt_path.read_text())
     evidence = receipt_data["evidence"]
     if expected_artifact_title is not None and evidence.get(
         "artifact_title"
@@ -149,6 +150,7 @@ def verify_download_receipt_artifact(
     receipt_path: Path,
     *,
     allowed_output_root: Path,
+    allowed_receipt_root: Path | None = None,
     expected_request_id: str | None = None,
     expected_story_id: str | None = None,
     expected_request_token: str | None = None,
@@ -159,6 +161,7 @@ def verify_download_receipt_artifact(
     with _verified_download_artifact(
         receipt_path,
         allowed_output_root=allowed_output_root,
+        allowed_receipt_root=allowed_receipt_root,
         expected_request_id=expected_request_id,
         expected_story_id=expected_story_id,
         expected_request_token=expected_request_token,
@@ -209,7 +212,11 @@ def _temporary_name(destination_name: str) -> str:
 
 
 def _atomic_copy_to_directory(
-    source: Path, directory_fd: int, directory: Path, destination_name: str
+    source: Path,
+    directory_fd: int,
+    directory: Path,
+    destination_name: str,
+    expected_sha256: str,
 ) -> Path:
     try:
         existing = os.stat(destination_name, dir_fd=directory_fd, follow_symlinks=False)
@@ -220,8 +227,16 @@ def _atomic_copy_to_directory(
             raise ValueError(
                 f"handoff destination is not a regular file: {directory / destination_name}"
             )
+        existing_fd = _open_regular_at(directory_fd, destination_name)
+        try:
+            existing_sha256 = sha256_file(Path(f"/proc/self/fd/{existing_fd}"))
+        finally:
+            os.close(existing_fd)
+        if existing_sha256 == expected_sha256:
+            return directory / destination_name
         raise FileExistsError(
-            f"handoff destination already exists: {directory / destination_name}"
+            "handoff destination already exists with different content: "
+            f"{directory / destination_name}"
         )
 
     temporary_name = _temporary_name(destination_name)
@@ -294,6 +309,7 @@ def handoff_notebooklm_video(
     allowed_output_root: Path,
     handoff_root: Path,
     allowed_handoff_root: Path,
+    allowed_receipt_root: Path | None = None,
     expected_request_id: str | None = None,
     expected_story_id: str | None = None,
     expected_request_token: str | None = None,
@@ -310,6 +326,7 @@ def handoff_notebooklm_video(
     with _verified_download_artifact(
         receipt_path,
         allowed_output_root=allowed_output_root,
+        allowed_receipt_root=allowed_receipt_root,
         expected_request_id=expected_request_id,
         expected_story_id=expected_story_id,
         expected_request_token=expected_request_token,
@@ -328,6 +345,7 @@ def handoff_notebooklm_video(
                 handoff_fd,
                 opened_handoff_root,
                 "notebooklm-original.mp4",
+                actual_sha,
             )
             destination_fd = _open_regular_at(handoff_fd, destination.name)
             try:

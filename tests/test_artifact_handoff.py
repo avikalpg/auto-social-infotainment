@@ -188,6 +188,23 @@ class CanonicalPcmHashTests(unittest.TestCase):
         )
         self.assertIsNone(result["packet_payload_matches_original"])
 
+    def test_audio_verification_rejects_multiple_source_streams(self):
+        source_media = {
+            "streams": [
+                {"codec_type": "audio", "codec_name": "aac"},
+                {"codec_type": "audio", "codec_name": "aac"},
+            ],
+            "format": {"format_name": "mov,mp4"},
+        }
+        final_media = {
+            "streams": [{"codec_type": "audio", "codec_name": "aac"}],
+            "format": {"format_name": "mov,mp4"},
+        }
+        with self.assertRaisesRegex(ValueError, "exactly one audio stream"):
+            verify_audio_stream_preserved(
+                Path("original.mp4"), Path("final.mp4"), source_media, final_media
+            )
+
 
 @unittest.skipUnless(FFMPEG and FFPROBE, "ffmpeg/ffprobe required for handoff integration test")
 class ArtifactHandoffTests(unittest.TestCase):
@@ -240,6 +257,16 @@ class ArtifactHandoffTests(unittest.TestCase):
             handed_off = Path(handoff["video_path"])
             self.assertTrue((handed_off.parent / "handoff.json").is_file())
             self.assertEqual(sha256_file(handed_off), receipt["artifact"]["sha256"])
+
+            resumed_handoff = handoff_notebooklm_video(
+                receipt_path,
+                allowed_output_root=output_root,
+                handoff_root=root / "handoff" / "STR-008",
+                allowed_handoff_root=root,
+                ffprobe_bin=FFPROBE,
+            )
+            self.assertEqual(resumed_handoff["sha256"], handoff["sha256"])
+            self.assertEqual(Path(resumed_handoff["video_path"]), handed_off)
 
             outro = root / "branded-outro-silent.mp4"
             final = root / "final.mp4"

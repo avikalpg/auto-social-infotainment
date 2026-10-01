@@ -115,23 +115,19 @@ def _verified_download_artifact(
     )
     receipt_data = json.loads(receipt_path.read_text())
     evidence = receipt_data["evidence"]
-    if (
-        expected_artifact_title is not None
-        and "artifact_title" in evidence
-        and evidence["artifact_title"] != expected_artifact_title
-    ):
+    if expected_artifact_title is not None and evidence.get(
+        "artifact_title"
+    ) != expected_artifact_title:
         raise ValueError(
             "download receipt evidence artifact_title mismatch: "
-            f"expected {expected_artifact_title}, got {evidence['artifact_title']}"
+            f"expected {expected_artifact_title}, got {evidence.get('artifact_title')}"
         )
-    if (
-        expected_notebook_url is not None
-        and "notebook_url" in receipt_data
-        and receipt_data["notebook_url"] != expected_notebook_url
-    ):
+    if expected_notebook_url is not None and receipt_data.get(
+        "notebook_url"
+    ) != expected_notebook_url:
         raise ValueError(
             "download receipt notebook_url mismatch: "
-            f"expected {expected_notebook_url}, got {receipt_data['notebook_url']}"
+            f"expected {expected_notebook_url}, got {receipt_data.get('notebook_url')}"
         )
     source = Path(str(artifact["output_path"]))
     if not _is_within(source, allowed_output_root):

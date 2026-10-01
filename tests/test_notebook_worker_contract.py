@@ -1024,7 +1024,7 @@ class NotebookWorkerContractTests(unittest.TestCase):
                     expected_story_id="story-2",
                 )
 
-            # Mismatched artifact_title
+            # Mismatched or missing artifact_title
             with self.assertRaisesRegex(ValueError, "artifact_title mismatch"):
                 handoff_notebooklm_video(
                     receipt_path,
@@ -1033,8 +1033,19 @@ class NotebookWorkerContractTests(unittest.TestCase):
                     allowed_handoff_root=root,
                     expected_artifact_title="Title 2",
                 )
+            receipt_without_title = dict(receipt, evidence={"local_worker": True})
+            receipt_path.write_text(json.dumps(receipt_without_title))
+            with self.assertRaisesRegex(ValueError, "artifact_title mismatch"):
+                handoff_notebooklm_video(
+                    receipt_path,
+                    allowed_output_root=allowed,
+                    handoff_root=root / "handoff",
+                    allowed_handoff_root=root,
+                    expected_artifact_title="Title 1",
+                )
 
-            # Mismatched notebook_url
+            # Mismatched or missing notebook_url
+            receipt_path.write_text(json.dumps(receipt))
             with self.assertRaisesRegex(ValueError, "notebook_url mismatch"):
                 handoff_notebooklm_video(
                     receipt_path,
@@ -1042,6 +1053,17 @@ class NotebookWorkerContractTests(unittest.TestCase):
                     handoff_root=root / "handoff",
                     allowed_handoff_root=root,
                     expected_notebook_url="https://notebook.google.com/notebook/other",
+                )
+            receipt_without_url = dict(receipt)
+            receipt_without_url.pop("notebook_url")
+            receipt_path.write_text(json.dumps(receipt_without_url))
+            with self.assertRaisesRegex(ValueError, "notebook_url mismatch"):
+                handoff_notebooklm_video(
+                    receipt_path,
+                    allowed_output_root=allowed,
+                    handoff_root=root / "handoff",
+                    allowed_handoff_root=root,
+                    expected_notebook_url="https://notebook.google.com/notebook/example",
                 )
 
 

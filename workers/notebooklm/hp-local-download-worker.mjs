@@ -96,7 +96,7 @@ export async function verifyPinnedPathUnchanged(file,pinned,artifact){
  catch(e) { if(e?.code==='ENOENT')fail('existing output changed during verification'); throw e; }
  const openedBefore=await pinned.handle.stat({bigint:true});
  if(before.isSymbolicLink()||!before.isFile()||!sameOpenedFile(before,openedBefore))fail('existing output changed during verification');
- if(await sha256(file)!==artifact.sha256)fail('existing output changed during verification');
+ if(await sha256(pinned.path)!==artifact.sha256)fail('existing output changed during verification');
  const after=await fs.lstat(file,{bigint:true});
  const openedAfter=await pinned.handle.stat({bigint:true});
  if(!sameOpenedFile(before,after)||!sameOpenedFile(after,openedAfter))fail('existing output changed during verification');

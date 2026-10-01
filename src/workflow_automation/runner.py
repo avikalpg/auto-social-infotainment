@@ -63,6 +63,24 @@ def _validate_queued_request_identity(
             raise ValueError(f"queued generation {key} does not match current story")
 
 
+def _resolve_notebook_output_path(value: object, output_root: Path) -> Path:
+    """Resolve a story override and require a file path below the trusted output root."""
+    candidate = Path(value).expanduser()
+    if not candidate.is_absolute():
+        raise RuntimeError("notebooklm_output_path must be an absolute path")
+    root = output_root.resolve()
+    resolved = candidate.resolve()
+    try:
+        relative = resolved.relative_to(root)
+    except ValueError as error:
+        raise RuntimeError(
+            "notebooklm_output_path must be within notebooklm_output_root"
+        ) from error
+    if relative == Path("."):
+        raise RuntimeError("notebooklm_output_path must name a file below notebooklm_output_root")
+    return resolved
+
+
 def run_stage(state: StoryState, stage: str, cfg: Config, dry_run: bool = False) -> None:
     rec = state.stages[stage]
     if rec.status == "done":
@@ -153,6 +171,10 @@ def _execute_stage(state: StoryState, stage: str, cfg: Config, dry_run: bool = F
         generation_request_id = f"notebooklm-generation-{state.story_id}"
         request_token = str(src.get("request_token") or generation_request_id)
         expected_format = str(src.get("expected_format") or "Short")
+        output_path = _resolve_notebook_output_path(
+            src.get("notebooklm_output_path") or out,
+            cfg.notebooklm_output_root,
+        )
 
         if dry_run:
             _validate_queued_request_identity(
@@ -206,7 +228,7 @@ def _execute_stage(state: StoryState, stage: str, cfg: Config, dry_run: bool = F
             "request_token": request_token,
             "notebook_url": str(src["notebook_url"]),
             "artifact_title": str(src["artifact_title"]),
-            "output_path": Path(src.get("notebooklm_output_path") or out),
+            "output_path": output_path,
             "allow_root": cfg.notebooklm_output_root,
             "receipt_path": receipt_path,
             "expected_format": expected_format,

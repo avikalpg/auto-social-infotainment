@@ -244,6 +244,41 @@ class CaptionWorkflowTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "artifact_title"):
                 run_stage(state, "video_produced", cfg, dry_run=True)
 
+    def test_video_produced_rejects_output_override_outside_trusted_root(self):
+        from types import SimpleNamespace
+
+        from workflow_automation.runner import run_stage
+        from workflow_automation.state import StoryState
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            output_root = root / "downloads"
+            output_root.mkdir()
+            cfg = SimpleNamespace(
+                notebooklm_generation_worker_cmd=None,
+                notebooklm_worker_cmd=None,
+                caption_generator_cmd=None,
+                notebooklm_output_root=output_root,
+                notebooklm_request_dir=root / "requests",
+                notebooklm_cdp_url=None,
+                content_root=root / "content",
+                ffmpeg_bin="ffmpeg",
+                ffprobe_bin="ffprobe",
+                max_retries=3,
+            )
+            state = StoryState(
+                "STR-019",
+                source={
+                    "notebook_url": "https://notebook.google.com/notebook/test-1",
+                    "artifact_title": "Test Title",
+                    "focus_prompt": "Focus on the disputed decision.",
+                    "notebooklm_output_path": str(root / "outside.mp4"),
+                },
+            )
+            run_stage(state, "video_queued", cfg, dry_run=True)
+
+            with self.assertRaisesRegex(RuntimeError, "within notebooklm_output_root"):
+                run_stage(state, "video_produced", cfg, dry_run=True)
 
     def test_video_queued_runs_generation_worker_and_validates_receipt(self):
         from types import SimpleNamespace

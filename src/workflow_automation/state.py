@@ -114,7 +114,7 @@ class StateStore:
     def save(self, state: StoryState) -> None:
         p = self.path(state.story_id)
         if p.exists():
-            shutil.copy2(p, p.with_suffix(p.suffix + f".{int(time.time())}.bak"))
+            shutil.copy2(p, p.with_suffix(p.suffix + f".{time.time_ns()}.bak"))
         fd, tmp = tempfile.mkstemp(dir=str(self.state_dir), prefix=p.name, suffix=".tmp")
         with os.fdopen(fd, "w") as f:
             json.dump(state.to_json(), f, indent=2, sort_keys=True)

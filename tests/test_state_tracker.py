@@ -51,6 +51,25 @@ class StateTrackerTests(unittest.TestCase):
             self.assertEqual(store.load("one").artifacts, {"x": "y"})
             self.assertTrue(list(tmp_path.glob("one.json.*.bak")))
 
+    def test_state_backups_do_not_collide_within_one_second(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            store = StateStore(root)
+            state = StoryState("one")
+            store.save(state)
+            with patch(
+                "workflow_automation.state.time.time_ns",
+                side_effect=(1_000_000_001, 1_000_000_002),
+            ):
+                state.artifacts["revision"] = "one"
+                store.save(state)
+                state.artifacts["revision"] = "two"
+                store.save(state)
+
+            backups = sorted(root.glob("one.json.*.bak"))
+            self.assertEqual(len(backups), 2)
+            self.assertNotEqual(backups[0].read_text(), backups[1].read_text())
+
     def test_select_next_story_skips_done(self):
         with tempfile.TemporaryDirectory() as d:
             tmp_path = Path(d)

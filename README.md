@@ -83,6 +83,8 @@ Key commands:
 
 Notebook worker contracts are JSON request/receipt files. Download requests require an absolute `receipt_path` contained by their trusted `allow_root`; the worker never derives or mutates that destination. Download receipts must be `done` and include `output_path`, verified `artifact` media metadata (`size_bytes`, `container`, `duration_seconds`, `dimensions`, `codecs`, `sha256`), and execution `evidence`:
 
+Current request and receipt writers always emit `schema_version: 1`. Contract readers accept an omitted `schema_version` only for backward compatibility with existing standalone clients; if the field is present, it must be the integer `1`.
+
 The lower-level download contract keeps `request_token` optional for compatibility with standalone download clients. The integrated `queue-video` to `produce-video` pipeline always writes it and rejects a generation or download receipt that omits or changes it, so tokenless requests cannot satisfy the pipeline's queue-to-download identity binding.
 
 The legacy Python helper names `write_worker_request()` and `ingest_worker_receipt()` remain importable, but they intentionally enforce the current strict download contract. `write_worker_request()` therefore requires story-level `notebook_url` and `artifact_title`; it does not hydrate the older `{id, main_character, primary_tension}` story shape.

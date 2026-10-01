@@ -61,6 +61,20 @@ test('generation request accepts only the documented contract and NotebookLM URL
       () => validateRequest(request(root, { receipt_path: path.join(root, '..', 'escape.json') })),
       /outside configured allow_root/,
     );
+    for (const timestamp of [
+      'yesterday',
+      '2026-10-01T08:00:00',
+      '2026-10-01T13:30:00+05:30',
+    ]) {
+      assert.throws(
+        () => validateRequest(request(root, { timestamp })),
+        /ISO-8601 UTC timestamp/,
+      );
+    }
+    assert.doesNotThrow(
+      () => validateRequest(request(root, { timestamp: '2026-10-01T08:00:00Z' })),
+    );
+
     for (const cdpUrl of [
       'ftp://127.0.0.1:9222',
       'http://user:password@127.0.0.1:9222',

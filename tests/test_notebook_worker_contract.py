@@ -547,6 +547,7 @@ class NotebookWorkerContractTests(unittest.TestCase):
                 "output_path": str(root / "out.mp4"),
                 "receipt_path": str(root / "receipt.json"),
             }
+            validate_notebook_request({key: value for key, value in req.items() if key != "schema_version"})
             for schema_version in (2, True, "1", 1.0):
                 with (
                     self.subTest(download_schema_version=schema_version),
@@ -921,8 +922,15 @@ class NotebookWorkerContractTests(unittest.TestCase):
             valid_cdp = dict(base_gen_req, cdp_url="http://127.0.0.1:9222")
             validate_notebook_generation_request(valid_cdp)
 
-            # Invalid timestamp
-            for bad_ts in (123, "", "   "):
+            # Invalid, timezone-less, and non-UTC timestamps
+            for bad_ts in (
+                123,
+                "",
+                "   ",
+                "yesterday",
+                "2026-09-30T00:00:00",
+                "2026-09-30T05:30:00+05:30",
+            ):
                 with self.subTest(bad_ts=bad_ts):
                     invalid = dict(base_gen_req, timestamp=bad_ts)
                     with self.assertRaisesRegex(ValueError, "timestamp"):

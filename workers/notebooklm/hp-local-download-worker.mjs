@@ -50,7 +50,7 @@ export async function atomicJson(file, value, allowRoot) {
  try { if((await fs.lstat(pinnedFile)).isSymbolicLink())fail('receipt_path must not be a symlink'); }
  catch(e) { if(e?.code!=='ENOENT'){await dirHandle.close();throw e;} }
  const tmp=path.join(pinnedDir,`.${path.basename(file)}.${process.pid}.${Date.now()}.tmp`); let handle;
- try { handle=await fs.open(tmp,'wx',0o600); await handle.writeFile(JSON.stringify(value,null,2)+'\n'); await handle.sync(); await handle.close(); handle=undefined; await fs.rename(tmp,pinnedFile); await dirHandle.sync(); }
+ try { handle=await fs.open(tmp,'wx',0o600); await handle.writeFile(JSON.stringify(value,null,2)+'\n'); await handle.sync(); await handle.close(); handle=undefined; await fs.link(tmp,pinnedFile); await fs.unlink(tmp); await dirHandle.sync(); }
  finally { await handle?.close().catch(()=>{}); await fs.unlink(tmp).catch(()=>{}); await dirHandle.close().catch(()=>{}); }
 }
 export async function publishVerifiedDownload(temporary, destination, allowRoot) {
@@ -86,6 +86,10 @@ export async function openPinnedArtifact(file){
   if(!opened.isFile())fail('existing output must be a regular file');
   return {handle,stat:opened,path:`/proc/${process.pid}/fd/${handle.fd}`};
  } catch(e) { await handle.close().catch(()=>{}); throw e; }
+}
+export async function openPinnedArtifactIfPresent(file){
+ try { return await openPinnedArtifact(file); }
+ catch(e) { if(e?.code==='ENOENT')return null; throw e; }
 }
 function sameOpenedFile(left,right){
  return left.dev===right.dev&&left.ino===right.ino&&left.size===right.size&&left.mtimeNs===right.mtimeNs&&left.ctimeNs===right.ctimeNs;
@@ -124,19 +128,30 @@ export function validateCdpUrl(value) {
  if(!['http:','https:'].includes(url.protocol)||!authority||!url.hostname||url.username||url.password)fail('cdp_url must be an HTTP(S) URL without credentials');
  return value;
 }
-export async function validate(req){
- if(req.schema_version!==undefined&&req.schema_version!==1)fail('schema_version must be 1');
+export function validateUtcTimestamp(value, field='timestamp'){
+ if(typeof value!=='string'||!value.trim())fail(`${field} must be an ISO-8601 UTC timestamp`);
+ const parsed=new Date(value);
+ if(!Number.isFinite(parsed.getTime())||!/(?:Z|[+-]00:00)$/i.test(value))fail(`${field} must be an ISO-8601 UTC timestamp`);
+ return value;
+}
+export async function validate(raw){
+ if(!raw||typeof raw!=='object'||Array.isArray(raw))fail('request must be a JSON object');
+ if(raw.schema_version!==undefined&&raw.schema_version!==1)fail('schema_version must be 1');
  for(const k of REQUIRED){
-   if(typeof req[k]!=='string'||!req[k].trim())fail(`${k} must be a non-empty string`);
+   if(typeof raw[k]!=='string'||!raw[k].trim())fail(`${k} must be a non-empty string`);
  }
- if(req.request_token!==undefined&&(typeof req.request_token!=='string'||!req.request_token.trim()))fail('request_token must be a non-empty string');
- const extra=Object.keys(req).filter(k=>!ALLOWED.has(k));if(extra.length)fail(`unsupported request keys: ${extra.sort().join(', ')}`);
- validateNotebookUrl(req.notebook_url);
- if(req.cdp_url!==undefined)req.cdp_url=validateCdpUrl(req.cdp_url);
- if(req.expected_format!==undefined&&req.expected_format!=='Short')fail('expected_format must be Short');
- if(req.expected_duration_seconds!==undefined&&(typeof req.expected_duration_seconds!=='number'||!Number.isFinite(req.expected_duration_seconds)||req.expected_duration_seconds<=0))fail('expected_duration_seconds must be a positive number');
- req.output_path=await safePath(req.output_path,req.allow_root,'output_path');
- req.receipt_path=await safePath(req.receipt_path,req.allow_root,'receipt_path');
+ if(raw.request_token!==undefined&&(typeof raw.request_token!=='string'||!raw.request_token.trim()))fail('request_token must be a non-empty string');
+ const extra=Object.keys(raw).filter(k=>!ALLOWED.has(k));if(extra.length)fail(`unsupported request keys: ${extra.sort().join(', ')}`);
+ const normalized={...raw,notebook_url:validateNotebookUrl(raw.notebook_url)};
+ if(raw.cdp_url!==undefined)normalized.cdp_url=validateCdpUrl(raw.cdp_url);
+ if(raw.expected_format!==undefined&&raw.expected_format!=='Short')fail('expected_format must be Short');
+ if(raw.expected_container!==undefined&&(typeof raw.expected_container!=='string'||!raw.expected_container.trim()))fail('expected_container must be a non-empty media container');
+ if(raw.expected_duration_seconds!==undefined&&(typeof raw.expected_duration_seconds!=='number'||!Number.isFinite(raw.expected_duration_seconds)||raw.expected_duration_seconds<=0))fail('expected_duration_seconds must be a positive number');
+ if(raw.ffprobe_bin!==undefined&&(typeof raw.ffprobe_bin!=='string'||!raw.ffprobe_bin.trim()))fail('ffprobe_bin must be a non-empty string');
+ if(raw.timestamp!==undefined)validateUtcTimestamp(raw.timestamp);
+ normalized.output_path=await safePath(raw.output_path,raw.allow_root,'output_path');
+ normalized.receipt_path=await safePath(raw.receipt_path,raw.allow_root,'receipt_path');
+ return normalized;
 }
 function verifyExpected(a,req){
  // expected_format names the queued NotebookLM overview, not a media container.
@@ -146,6 +161,7 @@ function verifyExpected(a,req){
 function normalizedContainer(value){return String(value||'').split(',').map(x=>x.trim().toLowerCase()).filter(Boolean).sort().join(',');}
 export function verifyExistingReceipt(receipt,req,artifact){
  if(!receipt||receipt.schema_version!==1||receipt.status!=='done')fail('existing output requires a valid completed receipt');
+ validateUtcTimestamp(receipt.timestamp,'existing receipt timestamp');
  for(const key of ['request_id','story_id','notebook_url','output_path']){
   if(receipt[key]!==req[key])fail(`existing receipt ${key} does not match request`);
  }
@@ -160,45 +176,38 @@ export function verifyExistingReceipt(receipt,req,artifact){
  if(JSON.stringify(recorded.dimensions)!==JSON.stringify(artifact.dimensions))fail('existing receipt artifact dimensions do not match output');
  if(JSON.stringify(recorded.codecs)!==JSON.stringify(artifact.codecs))fail('existing receipt artifact codecs do not match output');
 }
-async function main(){
- const requestFile=process.argv[2]; if(!requestFile)fail('usage: hp-local-download-worker.mjs REQUEST.json'); const req=JSON.parse(await fs.readFile(requestFile,'utf8')); await validate(req); const receipt=req.receipt_path;
- let existingStat = null;
+const sleep=(milliseconds)=>new Promise(resolve=>setTimeout(resolve,milliseconds));
+export async function verifyExistingArtifact(req,{receiptAttempts=1,receiptDelayMs=50}={}){
+ const pinned=await openPinnedArtifactIfPresent(req.output_path);
+ if(!pinned)return null;
  try {
-   existingStat = await fs.stat(req.output_path);
- } catch(e) {
-   if (e?.code !== 'ENOENT') throw e;
- }
- if (existingStat) {
-   const pinned=await openPinnedArtifact(req.output_path);
-   try {
-    const a = await probe(pinned.path, req.ffprobe_bin);
-    verifyExpected(a, req);
-    let priorReceipt;
-    try { priorReceipt=JSON.parse(await fs.readFile(receipt,'utf8')); }
-    catch(e) { if(e?.code==='ENOENT')fail('existing output requires a matching receipt'); throw e; }
-    verifyExistingReceipt(priorReceipt,req,a);
-    // Revalidate the pathname, inode, timestamps, size, and hash immediately before
-    // publishing evidence so a concurrent replacement cannot inherit this receipt.
-    await verifyPinnedPathUnchanged(req.output_path,pinned,a);
-    const r = {
-      schema_version: 1,
-      request_id: req.request_id,
-      story_id: req.story_id,
-      ...(req.request_token ? {request_token:req.request_token} : {}),
-      status: 'done',
-      notebook_url: req.notebook_url,
-      ...(req.expected_format ? {video_format:req.expected_format} : {}),
-      output_path: req.output_path,
-      allow_root: req.allow_root,
-      timestamp: new Date().toISOString(),
-      artifact: a,
-      evidence: { ...priorReceipt.evidence, idempotent_existing: true, artifact_title: req.artifact_title, local_worker: true }
-    };
-    await atomicJson(receipt, r, req.allow_root);
-    console.log(JSON.stringify(r));
-    return;
-   } finally { await pinned.handle.close().catch(()=>{}); }
- }
+  const artifact=await probe(pinned.path,req.ffprobe_bin);
+  verifyExpected(artifact,req);
+  let priorReceipt;
+  for(let attempt=1;attempt<=receiptAttempts;attempt++){
+   try { priorReceipt=JSON.parse(await fs.readFile(req.receipt_path,'utf8')); break; }
+   catch(e) {
+    if(e?.code!=='ENOENT')throw e;
+    if(attempt===receiptAttempts)fail('existing output requires a matching receipt');
+    await sleep(receiptDelayMs);
+   }
+  }
+  verifyExistingReceipt(priorReceipt,req,artifact);
+  await verifyPinnedPathUnchanged(req.output_path,pinned,artifact);
+  return {
+   ...priorReceipt,
+   timestamp:new Date().toISOString(),
+   artifact,
+   evidence:{...priorReceipt.evidence,idempotent_existing:true,artifact_title:req.artifact_title,local_worker:true},
+  };
+ } finally { await pinned.handle.close().catch(()=>{}); }
+}
+async function main(){
+ const requestFile=process.argv[2]; if(!requestFile)fail('usage: hp-local-download-worker.mjs REQUEST.json');
+ const req=await validate(JSON.parse(await fs.readFile(requestFile,'utf8')));
+ const receipt=req.receipt_path;
+ const existing=await verifyExistingArtifact(req);
+ if(existing){console.log(JSON.stringify(existing));return;}
  const { chromium }=await import('playwright-core'); const browser=await chromium.connectOverCDP(req.cdp_url||'http://127.0.0.1:9222');
  let lastError; try { const context=browser.contexts()[0]; if(!context)fail('authenticated Chrome context not found'); let page=context.pages().find(p=>p.url()===req.notebook_url||p.url().includes(new URL(req.notebook_url).pathname)); if(!page)page=await context.newPage();
   for(let attempt=1;attempt<=2;attempt++){
@@ -222,8 +231,14 @@ async function main(){
     console.log(JSON.stringify(r));
     return;
    }catch(e){
-    lastError=e;
     await fs.unlink(temporary).catch(()=>{});
+    if(e?.code==='EEXIST'){
+     const concurrent=await verifyExistingArtifact(req,{receiptAttempts:40,receiptDelayMs:50});
+     if(!concurrent)fail('concurrent output publication disappeared before verification');
+     console.log(JSON.stringify(concurrent));
+     return;
+    }
+    lastError=e;
     if(attempt===1)await page.reload({waitUntil:'domcontentloaded',timeout:60000}).catch(()=>{});
    }
   }

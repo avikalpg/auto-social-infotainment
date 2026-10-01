@@ -160,14 +160,22 @@ export function validateRequest(raw) {
       throw new Error(`missing/invalid ${key}`);
     }
   }
+  // Omission remains readable for backward compatibility; current producers emit version 1.
   if (raw.schema_version !== undefined && raw.schema_version !== 1) {
     throw new Error('schema_version must be 1');
   }
   if (raw.request_token !== undefined && (typeof raw.request_token !== 'string' || !raw.request_token.trim())) {
     throw new Error('request_token must be a non-empty string');
   }
-  if (raw.timestamp !== undefined && (typeof raw.timestamp !== 'string' || !raw.timestamp.trim())) {
-    throw new Error('timestamp must be a non-empty string');
+  if (raw.timestamp !== undefined) {
+    if (
+      typeof raw.timestamp !== 'string' ||
+      !raw.timestamp.trim() ||
+      !Number.isFinite(new Date(raw.timestamp).getTime()) ||
+      !/(?:Z|[+-]00:00)$/i.test(raw.timestamp)
+    ) {
+      throw new Error('timestamp must be an ISO-8601 UTC timestamp');
+    }
   }
   const allowRoot = assertLocalAbsolutePath(raw.allow_root, 'allow_root');
   const receiptPath = assertLocalAbsolutePath(raw.receipt_path, 'receipt_path');

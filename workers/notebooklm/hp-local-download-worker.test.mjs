@@ -8,6 +8,7 @@ import test from 'node:test';
 import {
   atomicJson,
   openPinnedArtifact,
+  openPinnedArtifactIfPresent,
   publishVerifiedDownload,
   sha256,
   validate,
@@ -15,6 +16,7 @@ import {
   validateNotebookUrl,
   verifyExistingReceipt,
   verifyPinnedPathUnchanged,
+  validateUtcTimestamp,
 } from './hp-local-download-worker.mjs';
 
 test('download receipt publication rejects a symlink destination', async () => {
@@ -34,6 +36,71 @@ test('download receipt publication rejects a symlink destination', async () => {
   } finally {
     await fs.rm(root, { recursive: true, force: true });
     await fs.rm(outside, { recursive: true, force: true });
+  }
+});
+
+test('download receipt publication preserves an existing concurrent result', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'notebooklm-download-'));
+  try {
+    const destination = path.join(root, 'receipt.json');
+    const first = { status: 'done', request_id: 'first' };
+    await atomicJson(destination, first, root);
+    await assert.rejects(
+      () => atomicJson(destination, { status: 'done', request_id: 'second' }, root),
+      { code: 'EEXIST' },
+    );
+    assert.deepEqual(JSON.parse(await fs.readFile(destination, 'utf8')), first);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test('existing artifact decision opens and pins the path atomically', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'notebooklm-download-'));
+  try {
+    const output = path.join(root, 'video.mp4');
+    assert.equal(await openPinnedArtifactIfPresent(output), null);
+    await fs.writeFile(output, 'artifact');
+    const pinned = await openPinnedArtifactIfPresent(output);
+    assert.ok(pinned);
+    try { assert.equal(await fs.readFile(pinned.path, 'utf8'), 'artifact'); }
+    finally { await pinned.handle.close(); }
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test('download worker validates optional contract fields and returns a normalized copy', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'notebooklm-download-'));
+  try {
+    const raw = {
+      schema_version: 1,
+      request_id: 'r1',
+      story_id: 's1',
+      notebook_url: 'https://notebook.google.com/notebook/example',
+      artifact_title: 'Artifact',
+      output_path: path.join(root, 'out.mp4'),
+      receipt_path: path.join(root, 'receipt.json'),
+      allow_root: root,
+      expected_container: 'mp4',
+      expected_duration_seconds: 12.5,
+      ffprobe_bin: 'ffprobe',
+      timestamp: '2026-10-01T08:00:00Z',
+    };
+    const normalized = await validate(raw);
+    assert.notEqual(normalized, raw);
+    assert.equal(raw.output_path, path.join(root, 'out.mp4'));
+    for (const [key, value, expected] of [
+      ['expected_container', '', /expected_container/],
+      ['ffprobe_bin', '   ', /ffprobe_bin/],
+      ['timestamp', 'yesterday', /ISO-8601 UTC/],
+      ['timestamp', '2026-10-01T13:30:00+05:30', /ISO-8601 UTC/],
+    ]) {
+      await assert.rejects(() => validate({ ...raw, [key]: value }), expected);
+    }
+    assert.throws(() => validateUtcTimestamp('2026-10-01T08:00:00'), /ISO-8601 UTC/);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
   }
 });
 
@@ -253,6 +320,7 @@ test('existing outputs require a matching receipt identity and hash', () => {
     status: 'done',
     notebook_url: req.notebook_url,
     video_format: 'Short',
+    timestamp: '2026-10-01T08:00:00Z',
     output_path: req.output_path,
     allow_root: req.allow_root,
     artifact,

@@ -9,7 +9,7 @@ from unittest.mock import Mock, patch
 
 from workflow_automation.handoff import handoff_notebooklm_video
 from workflow_automation.media import (
-    _verify_audio_start_timeline,
+    _verify_audio_timeline,
     append_branded_outro_preserve_audio,
     canonical_pcm_sha256,
     ffprobe_validate,
@@ -100,33 +100,42 @@ def make_silent_source_video(path: Path) -> None:
 
 
 class CanonicalPcmHashTests(unittest.TestCase):
-    def test_audio_timeline_rejects_shifted_start_and_av_offset(self):
+    def test_audio_timeline_rejects_shifted_start_av_offset_and_end(self):
         original = {
             "streams": [
-                {"codec_type": "video", "start_time": "0.000"},
-                {"codec_type": "audio", "start_time": "0.020"},
+                {"codec_type": "video", "start_time": "0.000", "duration": "10.000"},
+                {"codec_type": "audio", "start_time": "0.020", "duration": "9.000"},
             ],
             "format": {},
         }
         shifted_audio = {
             "streams": [
-                {"codec_type": "video", "start_time": "0.000"},
-                {"codec_type": "audio", "start_time": "0.200"},
+                {"codec_type": "video", "start_time": "0.000", "duration": "10.000"},
+                {"codec_type": "audio", "start_time": "0.200", "duration": "9.000"},
             ],
             "format": {},
         }
         shifted_video = {
             "streams": [
-                {"codec_type": "video", "start_time": "0.200"},
-                {"codec_type": "audio", "start_time": "0.020"},
+                {"codec_type": "video", "start_time": "0.200", "duration": "10.000"},
+                {"codec_type": "audio", "start_time": "0.020", "duration": "9.000"},
+            ],
+            "format": {},
+        }
+        shifted_end = {
+            "streams": [
+                {"codec_type": "video", "start_time": "0.000", "duration": "10.000"},
+                {"codec_type": "audio", "start_time": "0.060", "duration": "9.040"},
             ],
             "format": {},
         }
 
         with self.assertRaisesRegex(ValueError, "audio start time"):
-            _verify_audio_start_timeline(original, shifted_audio, 0.05)
+            _verify_audio_timeline(original, shifted_audio, 0.05)
         with self.assertRaisesRegex(ValueError, "audio/video start offset"):
-            _verify_audio_start_timeline(original, shifted_video, 0.05)
+            _verify_audio_timeline(original, shifted_video, 0.05)
+        with self.assertRaisesRegex(ValueError, "audio end time"):
+            _verify_audio_timeline(original, shifted_end, 0.05)
 
     def test_hashes_ffmpeg_output_in_bounded_chunks(self):
         chunks = [b"first chunk", b"second chunk"]

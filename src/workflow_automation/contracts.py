@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -23,6 +24,27 @@ def reject_unsupported_keys(obj: dict[str, Any], allowed: set[str], label: str) 
     extra = sorted(set(obj) - allowed)
     if extra:
         raise ValueError(f"{label} has unsupported keys: {', '.join(extra)}")
+
+
+def _validate_schema_version(data: dict[str, Any], label: str) -> None:
+    # Readers accept an omitted version for backward compatibility; all current writers emit 1.
+    if "schema_version" not in data:
+        return
+    value = data["schema_version"]
+    if isinstance(value, bool) or not isinstance(value, int) or value != 1:
+        raise ValueError(f"{label} schema_version must be 1")
+
+
+def _validate_utc_timestamp(value: Any, field: str) -> None:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field} must be an ISO-8601 UTC timestamp")
+    normalized = value[:-1] + "+00:00" if value.endswith("Z") else value
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError as error:
+        raise ValueError(f"{field} must be an ISO-8601 UTC timestamp") from error
+    if parsed.tzinfo is None or parsed.utcoffset() != timedelta(0):
+        raise ValueError(f"{field} must be an ISO-8601 UTC timestamp")
 
 
 def validate_candidate_story(story: dict[str, Any], source_id: str) -> dict[str, Any]:
@@ -101,12 +123,7 @@ def _validate_http_url(value: Any, field: str) -> None:
 
 
 def validate_notebook_generation_request(data: dict[str, Any]) -> None:
-    if "schema_version" in data and (
-        isinstance(data["schema_version"], bool)
-        or not isinstance(data["schema_version"], int)
-        or data["schema_version"] != 1
-    ):
-        raise ValueError("notebook generation request schema_version must be 1")
+    _validate_schema_version(data, "notebook generation request")
     allowed = {
         "schema_version",
         "request_id",
@@ -138,10 +155,8 @@ def validate_notebook_generation_request(data: dict[str, Any]) -> None:
         value = data.get(key)
         if not isinstance(value, str) or not value.strip():
             raise ValueError(f"notebook generation request {key} must be a non-empty string")
-    if "timestamp" in data and (
-        not isinstance(data["timestamp"], str) or not data["timestamp"].strip()
-    ):
-        raise ValueError("notebook generation request timestamp must be a non-empty string")
+    if "timestamp" in data:
+        _validate_utc_timestamp(data["timestamp"], "notebook generation request timestamp")
     if "cdp_url" in data:
         _validate_http_url(data["cdp_url"], "cdp_url")
     _validate_notebook_url(data["notebook_url"])
@@ -166,12 +181,7 @@ def validate_notebook_generation_receipt(data: dict[str, Any]) -> None:
         "error",
     }
     reject_unsupported_keys(data, allowed, "notebook generation receipt")
-    if "schema_version" in data and (
-        isinstance(data["schema_version"], bool)
-        or not isinstance(data["schema_version"], int)
-        or data["schema_version"] != 1
-    ):
-        raise ValueError("notebook generation receipt schema_version must be 1")
+    _validate_schema_version(data, "notebook generation receipt")
     if "status" in data and not isinstance(data["status"], str):
         raise ValueError("notebook generation receipt status must be a string")
     if "evidence" in data and not isinstance(data["evidence"], dict):
@@ -202,6 +212,7 @@ def validate_notebook_generation_receipt(data: dict[str, Any]) -> None:
     ):
         if not isinstance(data[key], str) or not data[key].strip():
             raise ValueError(f"notebook generation receipt {key} must be a non-empty string")
+    _validate_utc_timestamp(data["timestamp"], "notebook generation receipt timestamp")
     if data["status"] not in {"queued", "error"}:
         raise ValueError("notebook generation receipt status must be queued or error")
     if data["video_format"] != "Short":
@@ -268,12 +279,7 @@ def validate_notebook_generation_receipt(data: dict[str, Any]) -> None:
 
 
 def validate_notebook_request(data: dict[str, Any]) -> None:
-    if "schema_version" in data and (
-        isinstance(data["schema_version"], bool)
-        or not isinstance(data["schema_version"], int)
-        or data["schema_version"] != 1
-    ):
-        raise ValueError("notebook download request schema_version must be 1")
+    _validate_schema_version(data, "notebook download request")
     allowed = {
         "schema_version",
         "request_id",
@@ -323,10 +329,8 @@ def validate_notebook_request(data: dict[str, Any]) -> None:
         _absolute_contained_path(data["receipt_path"], allow_root, "receipt_path")
     if "cdp_url" in data:
         _validate_http_url(data["cdp_url"], "cdp_url")
-    if "timestamp" in data and (
-        not isinstance(data["timestamp"], str) or not data["timestamp"].strip()
-    ):
-        raise ValueError("timestamp must be a non-empty string")
+    if "timestamp" in data:
+        _validate_utc_timestamp(data["timestamp"], "timestamp")
     if "ffprobe_bin" in data and (
         not isinstance(data["ffprobe_bin"], str) or not data["ffprobe_bin"].strip()
     ):
@@ -369,12 +373,7 @@ def validate_notebook_receipt(data: dict[str, Any], *, allow_root: Path | str) -
         },
         "notebook download receipt",
     )
-    if "schema_version" in data and (
-        isinstance(data["schema_version"], bool)
-        or not isinstance(data["schema_version"], int)
-        or data["schema_version"] != 1
-    ):
-        raise ValueError("notebook download receipt schema_version must be 1")
+    _validate_schema_version(data, "notebook download receipt")
     require_keys(
         data,
         {
@@ -391,6 +390,7 @@ def validate_notebook_receipt(data: dict[str, Any], *, allow_root: Path | str) -
     for key in ("request_id", "story_id", "output_path", "timestamp"):
         if not isinstance(data[key], str) or not data[key].strip():
             raise ValueError(f"notebook download receipt {key} must be a non-empty string")
+    _validate_utc_timestamp(data["timestamp"], "notebook download receipt timestamp")
     if "request_token" in data and (
         not isinstance(data["request_token"], str) or not data["request_token"].strip()
     ):

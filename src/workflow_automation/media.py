@@ -332,7 +332,7 @@ def _stream_start_time(media: dict[str, Any], codec_type: str) -> float:
         raise ValueError(f"{codec_type} stream start_time must be numeric") from error
 
 
-def _verify_audio_start_timeline(
+def _verify_audio_timeline(
     original_media: dict[str, Any], final_media: dict[str, Any], tolerance: float
 ) -> dict[str, float]:
     source_video_start = _stream_start_time(original_media, "video")
@@ -345,6 +345,10 @@ def _verify_audio_start_timeline(
     final_audio_video_offset = final_audio_start - final_video_start
     if abs(final_audio_video_offset - source_audio_video_offset) > tolerance:
         raise ValueError("final audio/video start offset changed while appending the branded outro")
+    source_audio_end = source_audio_start + _stream_duration(original_media, "audio")
+    final_audio_end = final_audio_start + _stream_duration(final_media, "audio")
+    if abs(final_audio_end - source_audio_end) > tolerance:
+        raise ValueError("final audio end time changed while appending the branded outro")
     return {
         "source_video_start_seconds": source_video_start,
         "source_audio_start_seconds": source_audio_start,
@@ -352,6 +356,8 @@ def _verify_audio_start_timeline(
         "final_audio_start_seconds": final_audio_start,
         "source_audio_video_offset_seconds": source_audio_video_offset,
         "final_audio_video_offset_seconds": final_audio_video_offset,
+        "source_audio_end_seconds": source_audio_end,
+        "final_audio_end_seconds": final_audio_end,
     }
 
 
@@ -464,9 +470,7 @@ def append_branded_outro_preserve_audio(
             raise ValueError("final video duration does not include the complete branded outro")
         if abs(final_audio_duration - source_audio_duration) > 0.05:
             raise ValueError("final audio duration changed while appending the branded outro")
-        timeline_starts = _verify_audio_start_timeline(
-            original_media, media, audio_start_tolerance
-        )
+        timeline_starts = _verify_audio_timeline(original_media, media, audio_start_tolerance)
         if final_video_duration <= final_audio_duration:
             raise ValueError("branded outro must extend video beyond the preserved audio stream")
         timeline = {

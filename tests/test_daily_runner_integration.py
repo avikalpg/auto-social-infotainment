@@ -130,7 +130,7 @@ def test_production_autonomous_config_validation(tmp_path: Path) -> None:
 
     errors = cfg.validate(dry_run=False, autonomous=True)
     assert any("llm_cmd" in e for e in errors)
-    assert any("linkedin_cmd" in e for e in errors)
-    assert any("youtube_cmd" in e for e in errors)
-    assert any("instagram_cmd" in e for e in errors)
-    assert any("x_cmd" in e for e in errors)
+    assert not any("linkedin_cmd" in e for e in errors)
+    assert not any("youtube_cmd" in e for e in errors)
+    assert not any("instagram_cmd" in e for e in errors)
+    assert not any("x_cmd" in e for e in errors)

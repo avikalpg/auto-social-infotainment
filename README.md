@@ -127,7 +127,7 @@ The ffmpeg outro utility supports exactly one source audio stream. It replaces t
   - Schedulers persist state in `state/<story_id>.schedule.json` with deterministic seeds so retries or restarts reload the exact same schedule and do not re-randomize.
 - **Non-blocking Target Resilience**:
   - Unconfigured or disconnected browser targets enter explicit `platform_blocked` or `needs_human_auth` states without halting eligible platforms.
-  - In production autonomous runs, all 4 publisher commands (`linkedin_cmd`, `youtube_cmd`, `instagram_cmd`, `x_cmd`), `llm_cmd`, workers, and `branded_outro_path` are required by config validation. Dry runs permit simulation.
+  - Production autonomous runs require `llm_cmd`, the NotebookLM workers, `caption_generator_cmd`, and `branded_outro_path`. Publisher commands are validated independently at execution time: a missing LinkedIn, YouTube, Instagram, or X adapter records only that target as `platform_blocked` while all configured targets continue. Dry runs permit simulation.
 - **Tick & Watch Execution**:
   - Standalone daily invocation: `workflow-automation-daily --config config.json` executes or ticks the active story, publishing targets whose `not_before` time has arrived.
   - Watch mode: `workflow-automation-daily --config config.json --watch-until-complete [--poll-interval-seconds 30]` polls and resumes the same in-flight active story until all targets settle or the day cutoff is reached.

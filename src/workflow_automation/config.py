@@ -109,16 +109,14 @@ class Config:
             errors.append("max_retries must be between 1 and 10")
 
         if autonomous and not dry_run:
-            # Production autonomous mode requires LLM, NotebookLM, caption generator, and all 4 publishers
+            # Production must have the shared editorial and media pipeline. Publisher adapters
+            # are intentionally excluded: a missing adapter blocks only its own platform while
+            # every configured target continues independently.
             required_cmds = {
                 "llm_cmd": self.llm_cmd,
                 "notebooklm_generation_worker_cmd": self.notebooklm_generation_worker_cmd,
                 "notebooklm_worker_cmd": self.notebooklm_worker_cmd,
                 "caption_generator_cmd": self.caption_generator_cmd,
-                "linkedin_cmd": self.linkedin_cmd,
-                "youtube_cmd": self.youtube_cmd,
-                "instagram_cmd": self.instagram_cmd,
-                "x_cmd": self.x_cmd,
             }
             for cmd_name, cmd_val in required_cmds.items():
                 if not cmd_val:

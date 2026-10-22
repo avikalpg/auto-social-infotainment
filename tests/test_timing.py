@@ -29,8 +29,8 @@ def test_timing_schedule_deterministic_seeding() -> None:
 
     assert sched1.ready_epoch == sched2.ready_epoch
     for t in targets:
-        assert sched1.target_schedules[t].scheduled_epoch == sched2.target_schedules[t].scheduled_epoch
-        assert sched1.target_schedules[t].scheduled_iso == sched2.target_schedules[t].scheduled_iso
+        assert sched1.target_schedules[t].not_before_epoch == sched2.target_schedules[t].not_before_epoch
+        assert sched1.target_schedules[t].not_before_iso == sched2.target_schedules[t].not_before_iso
 
 
 def test_timing_schedule_persistence_serialization() -> None:
@@ -44,7 +44,7 @@ def test_timing_schedule_persistence_serialization() -> None:
     assert restored.ready_epoch == sched.ready_epoch
     assert restored.ready_iso == sched.ready_iso
     for t in targets:
-        assert restored.target_schedules[t].scheduled_epoch == sched.target_schedules[t].scheduled_epoch
+        assert restored.target_schedules[t].not_before_epoch == sched.target_schedules[t].not_before_epoch
 
 
 def test_is_target_ready_for_publication() -> None:
@@ -52,8 +52,8 @@ def test_is_target_ready_for_publication() -> None:
         ready_epoch=1000.0,
         ready_iso="1970-01-01T00:16:40Z",
         target_schedules={
-            "linkedin": TargetSchedule(scheduled_epoch=1200.0, scheduled_iso="1970-01-01T00:20:00Z"),
-            "youtube": TargetSchedule(scheduled_epoch=1500.0, scheduled_iso="1970-01-01T00:25:00Z"),
+            "linkedin": TargetSchedule(not_before_epoch=1200.0, not_before_iso="1970-01-01T00:20:00Z"),
+            "youtube": TargetSchedule(not_before_epoch=1500.0, not_before_iso="1970-01-01T00:25:00Z"),
         },
     )
 
@@ -115,6 +115,7 @@ def test_orchestrator_timing_schedule_persistence(tmp_path: Path) -> None:
     # Run 1 creates schedule
     rep1 = runner.run_daily_pipeline(story_id_override="STR-001", dry_run=True, now_epoch=1000.0)
     assert rep1.story_id == "STR-001"
+    assert rep1.platform_results["linkedin"]["not_before"] != ""
     sched_file = state_dir / "STR-001.schedule.json"
     assert sched_file.exists()
     sched1 = json.loads(sched_file.read_text())
@@ -124,4 +125,4 @@ def test_orchestrator_timing_schedule_persistence(tmp_path: Path) -> None:
     assert rep2.story_id == "STR-001"
     sched2 = json.loads(sched_file.read_text())
     assert sched1["ready_epoch"] == sched2["ready_epoch"]
-    assert sched1["target_schedules"]["linkedin"]["scheduled_epoch"] == sched2["target_schedules"]["linkedin"]["scheduled_epoch"]
+    assert sched1["target_schedules"]["linkedin"]["not_before_epoch"] == sched2["target_schedules"]["linkedin"]["not_before_epoch"]

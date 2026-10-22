@@ -18,17 +18,19 @@ class TimingPolicy:
 
 @dataclass
 class TargetSchedule:
-    scheduled_epoch: float
-    scheduled_iso: str
+    not_before_epoch: float
+    not_before_iso: str
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> TargetSchedule:
+        epoch = float(data.get("not_before_epoch", data.get("scheduled_epoch", 0.0)))
+        iso = str(data.get("not_before_iso", data.get("scheduled_iso", "")))
         return cls(
-            scheduled_epoch=float(data["scheduled_epoch"]),
-            scheduled_iso=str(data["scheduled_iso"]),
+            not_before_epoch=epoch,
+            not_before_iso=iso,
         )
 
 
@@ -65,7 +67,7 @@ def generate_publication_schedule(
     base_epoch: float | None = None,
     seed: int | str | None = None,
 ) -> PublicationSchedule:
-    """Generate a deterministic, bounded publication schedule spread across targets."""
+    """Generate a deterministic, bounded publication schedule with staggered not-before timestamps."""
     if base_epoch is None:
         base_epoch = time.time()
 
@@ -75,6 +77,7 @@ def generate_publication_schedule(
     seed_int = int(hashlib.sha256(str(seed).encode()).hexdigest(), 16)
     rng = random.Random(seed_int)
 
+    # Initial completion-driven jitter after package ready
     initial_jitter = rng.randint(
         policy.initial_jitter_min_seconds,
         policy.initial_jitter_max_seconds,
@@ -90,8 +93,8 @@ def generate_publication_schedule(
         current_time += interval
         scheduled_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(current_time))
         target_schedules[target] = TargetSchedule(
-            scheduled_epoch=current_time,
-            scheduled_iso=scheduled_iso,
+            not_before_epoch=current_time,
+            not_before_iso=scheduled_iso,
         )
 
     ready_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(base_epoch))
@@ -107,9 +110,9 @@ def is_target_ready_for_publication(
     target: str,
     current_epoch: float | None = None,
 ) -> bool:
-    """Check if the scheduled window for a specific platform has elapsed."""
+    """Check if the not-before timestamp for a specific platform has elapsed."""
     if target not in schedule.target_schedules:
         return True
     if current_epoch is None:
         current_epoch = time.time()
-    return current_epoch >= schedule.target_schedules[target].scheduled_epoch
+    return current_epoch >= schedule.target_schedules[target].not_before_epoch

@@ -53,11 +53,14 @@ def test_daily_runner_cli_dry_run_execution(tmp_path: Path) -> None:
     code = main(["--config", str(cfg_file), "--dry-run"])
     assert code == ExitCode.OK
 
-    ledger_path = state_dir / "publication-ledger.json"
-    assert ledger_path.exists()
-    ledger_data = json.loads(ledger_path.read_text())
-    assert "STR-001" in ledger_data["stories"]
-    targets = ledger_data["stories"]["STR-001"]["targets"]
-    assert set(targets.keys()) == {"linkedin", "youtube", "instagram", "x"}
-    for plat in targets:
-        assert targets[plat]["status"] == "published"
+    # State file must record scheduled not_before for each stage in dry-run
+    st_path = state_dir / "STR-001.json"
+    assert st_path.exists()
+    st_data = json.loads(st_path.read_text())
+    assert st_data["stages"]["linkedin_published"]["verification"]["not_before"] != ""
+
+    sched_path = state_dir / "STR-001.schedule.json"
+    assert sched_path.exists()
+    sched_data = json.loads(sched_path.read_text())
+    assert "target_schedules" in sched_data
+    assert "not_before_epoch" in sched_data["target_schedules"]["linkedin"]

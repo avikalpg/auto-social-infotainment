@@ -250,31 +250,52 @@ class AutonomousDailyRunner:
                 }
                 continue
 
-            # Respect scheduled jitter/delay unless in dry-run simulation mode
-            if not dry_run and not is_target_ready_for_publication(schedule, target, current_epoch=now_epoch):
-                target_sched = schedule.target_schedules.get(target)
-                sched_iso = target_sched.scheduled_iso if target_sched else "future"
+            target_sched = schedule.target_schedules.get(target)
+            not_before_iso = target_sched.not_before_iso if target_sched else "immediate"
+
+            # In dry-run mode: expose plan including scheduled not_before timestamp
+            if dry_run:
+                publisher = publishers[target]
+                res = publisher.publish(target_story_id, pkg_path, dry_run=True)
+                res_dict = res.to_dict()
+                res_dict["not_before"] = not_before_iso
+                report.platform_results[target] = res_dict
+                stage_rec.status = "dry_run"
+                stage_rec.updated_at = utcnow()
+                stage_rec.verification = {
+                    "public_url": res.public_url,
+                    "evidence": res.verification_evidence,
+                    "not_before": not_before_iso,
+                    "timestamp": res.timestamp,
+                }
+                store.save(state)
+                report.stages_completed.append(stage_name)
+                continue
+
+            # Respect scheduled jitter/not-before delay in production mode
+            if not is_target_ready_for_publication(schedule, target, current_epoch=now_epoch):
                 report.platform_results[target] = {
                     "status": "waiting_schedule",
-                    "scheduled_at": sched_iso,
-                    "note": f"Deferred until scheduled window {sched_iso} to vary naturally",
+                    "not_before": not_before_iso,
+                    "note": f"Deferred until not-before window {not_before_iso} to vary naturally",
                 }
                 continue
 
             publisher = publishers[target]
-            res = publisher.publish(target_story_id, pkg_path, dry_run=dry_run)
+            res = publisher.publish(target_story_id, pkg_path, dry_run=False)
 
             # Record in atomic publication ledger
             self.ledger.record_target(target_story_id, target, res)
             report.platform_results[target] = res.to_dict()
 
             if res.status == "published":
-                stage_rec.status = "dry_run" if dry_run else "done"
+                stage_rec.status = "done"
                 stage_rec.error = None
                 stage_rec.updated_at = utcnow()
                 stage_rec.verification = {
                     "public_url": res.public_url,
                     "evidence": res.verification_evidence,
+                    "not_before": not_before_iso,
                     "timestamp": res.timestamp,
                 }
                 store.save(state)

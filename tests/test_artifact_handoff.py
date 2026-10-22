@@ -10,9 +10,9 @@ from unittest.mock import Mock, patch
 from workflow_automation.handoff import handoff_notebooklm_video
 from workflow_automation.media import (
     _verify_audio_timeline,
-    append_branded_outro_preserve_audio,
     canonical_pcm_sha256,
     ffprobe_validate,
+    replace_tail_with_branded_outro_preserve_audio,
     sha256_file,
     verify_audio_stream_preserved,
 )
@@ -217,7 +217,7 @@ class ArtifactHandoffTests(unittest.TestCase):
             make_silent_outro(outro)
 
             with self.assertRaisesRegex(ValueError, "source video must contain an audio stream"):
-                append_branded_outro_preserve_audio(
+                replace_tail_with_branded_outro_preserve_audio(
                     source, outro, root / "final.mp4", FFMPEG, FFPROBE
                 )
 
@@ -271,7 +271,9 @@ class ArtifactHandoffTests(unittest.TestCase):
             outro = root / "branded-outro-silent.mp4"
             final = root / "final.mp4"
             make_silent_outro(outro)
-            result = append_branded_outro_preserve_audio(handed_off, outro, final, FFMPEG, FFPROBE)
+            result = replace_tail_with_branded_outro_preserve_audio(
+                handed_off, outro, final, FFMPEG, FFPROBE
+            )
             self.assertTrue(result["audio"]["matches_original"])
             self.assertEqual(
                 result["audio"]["original_canonical_pcm_sha256"],
@@ -297,18 +299,17 @@ class ArtifactHandoffTests(unittest.TestCase):
                 result["timeline"]["final_audio_video_offset_seconds"],
                 delta=0.05,
             )
-            self.assertGreater(
-                result["timeline"]["final_video_seconds"],
-                result["timeline"]["final_audio_seconds"],
-            )
+            self.assertTrue(result["timeline"]["tail_replaced"])
+            self.assertTrue(result["timeline"]["audio_preserved"])
             self.assertAlmostEqual(
                 result["timeline"]["source_audio_seconds"],
                 result["timeline"]["final_audio_seconds"],
                 delta=0.05,
             )
-            self.assertGreater(
+            self.assertAlmostEqual(
                 float(ffprobe_validate(final, FFPROBE)["format"]["duration"]),
                 float(ffprobe_validate(handed_off, FFPROBE)["format"]["duration"]),
+                delta=0.11,
             )
 
             package = create_content_package(
@@ -647,7 +648,9 @@ class ArtifactHandoffTests(unittest.TestCase):
                 check=True,
             )
 
-            result = append_branded_outro_preserve_audio(source, outro, final, FFMPEG, FFPROBE)
+            result = replace_tail_with_branded_outro_preserve_audio(
+                source, outro, final, FFMPEG, FFPROBE
+            )
             self.assertTrue(result["audio"]["matches_original"])
             self.assertEqual(
                 result["audio"]["original_canonical_pcm_sha256"],
@@ -656,12 +659,13 @@ class ArtifactHandoffTests(unittest.TestCase):
 
             final_media = ffprobe_validate(final, FFPROBE)
             final_v = next(s for s in final_media["streams"] if s.get("codec_type") == "video")
-            # Resulting video stream has matching dimensions, yuv420p format, SAR 1:1, and extended duration
+            # Resulting stream keeps source geometry and duration while replacing its visual tail
             self.assertEqual(final_v["width"], 32)
             self.assertEqual(final_v["height"], 32)
             self.assertEqual(final_v["pix_fmt"], "yuv420p")
             self.assertEqual(final_v.get("sample_aspect_ratio"), "1:1")
-            self.assertGreater(
+            self.assertAlmostEqual(
                 float(final_media["format"]["duration"]),
                 float(ffprobe_validate(source, FFPROBE)["format"]["duration"]),
+                delta=0.11,
             )

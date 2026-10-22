@@ -371,17 +371,19 @@ def _verify_audio_timeline(
     }
 
 
-def append_branded_outro_preserve_audio(
+def replace_tail_with_branded_outro_preserve_audio(
     original_video: Path,
     branded_outro_visual: Path,
     output_video: Path,
     ffmpeg_bin: str = "ffmpeg",
     ffprobe_bin: str = "ffprobe",
 ) -> dict[str, object]:
-    """Append a silent branded visual outro while stream-copying and verifying source audio.
+    """Replace the source programme's final visual seconds with a silent branded outro.
 
-    The outro must be video-only. Keeping it silent lets the original audio track remain exactly
-    the original program audio rather than silently changing the audio editorially.
+    The final visual timeline keeps the programme duration instead of growing by the outro
+    duration. The complete source audio stream is copied unchanged and verified against the
+    output. If the source picture ends before its audio, the final source frame is held only
+    until the replacement point, then the outro begins.
     """
     original_media = ffprobe_validate(original_video, ffprobe_bin)
     outro_media = ffprobe_validate(branded_outro_visual, ffprobe_bin)
@@ -406,8 +408,17 @@ def append_branded_outro_preserve_audio(
     ):
         raise ValueError("branded outro dimensions must match the source video")
 
-    # Normalize frame rate, pixel format, SAR, and time base across inputs before concatenation
-    # to avoid ffmpeg concat filter failures or stream property mismatches.
+    source_video_duration = _stream_duration(original_media, "video")
+    source_audio_duration = _stream_duration(original_media, "audio")
+    outro_video_duration = _stream_duration(outro_media, "video")
+    programme_duration = max(source_video_duration, source_audio_duration)
+    replacement_start = programme_duration - outro_video_duration
+    if replacement_start <= 0:
+        raise ValueError("source programme must be longer than the branded outro")
+
+    # Normalise frame rate, pixel format, SAR, and time base before concatenation. tpad covers
+    # malformed source files whose picture ends before their narration, but only until the point
+    # where the outro replaces the tail.
     source_fps = str(
         original_video_stream.get("r_frame_rate")
         or original_video_stream.get("avg_frame_rate")
@@ -421,8 +432,12 @@ def append_branded_outro_preserve_audio(
         sar = "1/1"
 
     filter_complex = (
-        f"[0:v:0]fps=fps={source_fps}:round=near,format=pix_fmts={pix_fmt},setsar=sar={sar},settb=AVTB[v0];"
-        f"[1:v:0]fps=fps={source_fps}:round=near,format=pix_fmts={pix_fmt},setsar=sar={sar},settb=AVTB[v1];"
+        f"[0:v:0]fps=fps={source_fps}:round=near,format=pix_fmts={pix_fmt},"
+        f"setsar=sar={sar},tpad=stop_mode=clone:stop_duration={programme_duration:.9f},"
+        f"trim=start=0:end={replacement_start:.9f},setpts=PTS-STARTPTS,settb=AVTB[v0];"
+        f"[1:v:0]fps=fps={source_fps}:round=near,format=pix_fmts={pix_fmt},"
+        f"setsar=sar={sar},trim=start=0:duration={outro_video_duration:.9f},"
+        "setpts=PTS-STARTPTS,settb=AVTB[v1];"
         "[v0][v1]concat=n=2:v=1:a=0[v]"
     )
 
@@ -461,7 +476,7 @@ def append_branded_outro_preserve_audio(
             check=False,
         )
         if proc.returncode != 0:
-            raise RuntimeError(f"ffmpeg branded outro append failed: {proc.stderr.strip()}")
+            raise RuntimeError(f"ffmpeg branded outro replacement failed: {proc.stderr.strip()}")
         media = ffprobe_validate(tmp, ffprobe_bin)
         verification = verify_canonical_pcm_equal(original_video, tmp, ffmpeg_bin)
         verification.update(
@@ -473,28 +488,26 @@ def append_branded_outro_preserve_audio(
                 ffmpeg_bin,
             )
         )
-        source_video_duration = _stream_duration(original_media, "video")
-        source_audio_duration = _stream_duration(original_media, "audio")
-        outro_video_duration = _stream_duration(outro_media, "video")
         final_video_duration = _stream_duration(media, "video")
         final_audio_duration = _stream_duration(media, "audio")
         video_tolerance = max(0.1, 2 * _frame_duration(original_video_stream))
         audio_start_tolerance = max(0.05, _frame_duration(original_video_stream))
-        expected_video_duration = source_video_duration + outro_video_duration
-        if abs(final_video_duration - expected_video_duration) > video_tolerance:
-            raise ValueError("final video duration does not include the complete branded outro")
+        if abs(final_video_duration - programme_duration) > video_tolerance:
+            raise ValueError("final video duration changed while replacing the tail with the outro")
         if abs(final_audio_duration - source_audio_duration) > 0.05:
-            raise ValueError("final audio duration changed while appending the branded outro")
+            raise ValueError("final audio duration changed while replacing the tail with the outro")
         timeline_starts = _verify_audio_timeline(original_media, media, audio_start_tolerance)
-        if final_video_duration <= final_audio_duration:
-            raise ValueError("branded outro must extend video beyond the preserved audio stream")
         timeline = {
             "source_video_seconds": source_video_duration,
             "source_audio_seconds": source_audio_duration,
+            "programme_seconds": programme_duration,
             "outro_video_seconds": outro_video_duration,
+            "replacement_start_seconds": replacement_start,
             "final_video_seconds": final_video_duration,
             "final_audio_seconds": final_audio_duration,
             **timeline_starts,
+            "tail_replaced": True,
+            "audio_preserved": True,
             "silent_outro_verified": True,
         }
         tmp.replace(output_video)
@@ -508,6 +521,19 @@ def append_branded_outro_preserve_audio(
     except Exception:
         tmp.unlink(missing_ok=True)
         raise
+
+
+def append_branded_outro_preserve_audio(
+    original_video: Path,
+    branded_outro_visual: Path,
+    output_video: Path,
+    ffmpeg_bin: str = "ffmpeg",
+    ffprobe_bin: str = "ffprobe",
+) -> dict[str, object]:
+    """Compatibility wrapper: branded outros now replace the source tail, never append."""
+    return replace_tail_with_branded_outro_preserve_audio(
+        original_video, branded_outro_visual, output_video, ffmpeg_bin, ffprobe_bin
+    )
 
 
 def verify_audio_hash(path: Path, expected_sha256: str | None) -> dict[str, object]:

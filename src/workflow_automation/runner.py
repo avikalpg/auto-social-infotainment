@@ -6,7 +6,7 @@ from .adapters import AdapterNotConfigured, CommandAdapter
 from .captions import read_generated_caption, write_caption_request
 from .config import Config
 from .handoff import handoff_notebooklm_video
-from .media import append_branded_outro_preserve_audio, verify_audio_hash
+from .media import replace_tail_with_branded_outro_preserve_audio, verify_audio_hash
 from .notebook import (
     build_download_request,
     build_generation_request,
@@ -298,7 +298,7 @@ def _execute_stage(state: StoryState, stage: str, cfg: Config, dry_run: bool = F
             )
             artifact = handoff.pop("verified_artifact")
             final_video = handoff_root / "final-with-branded-outro.mp4"
-            outro = append_branded_outro_preserve_audio(
+            outro = replace_tail_with_branded_outro_preserve_audio(
                 Path(handoff["video_path"]),
                 cfg.branded_outro_path,
                 final_video,

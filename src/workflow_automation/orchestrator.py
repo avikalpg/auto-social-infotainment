@@ -15,6 +15,12 @@ from .llm_client import LLMClient
 from .publishers import CommandPublisher, PublishResult
 from .runner import run_stage
 from .state import StateStore, StoryState, utcnow
+from .timing import (
+    PublicationSchedule,
+    TimingPolicy,
+    generate_publication_schedule,
+    is_target_ready_for_publication,
+)
 from .tracker import find_source, find_story, load_stories, story_id
 
 LOG = logging.getLogger("workflow_automation")
@@ -41,6 +47,7 @@ class DailyRunReport:
     factual_review_approved: bool
     stages_completed: list[str] = field(default_factory=list)
     platform_results: dict[str, dict[str, Any]] = field(default_factory=dict)
+    publication_schedule: dict[str, Any] | None = None
     warnings: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
 
@@ -91,8 +98,9 @@ class PublicationLedger:
 class AutonomousDailyRunner:
     """End-to-end daily social video pipeline orchestrator."""
 
-    def __init__(self, cfg: Config):
+    def __init__(self, cfg: Config, timing_policy: TimingPolicy | None = None):
         self.cfg = cfg
+        self.timing_policy = timing_policy or TimingPolicy()
         self.llm = LLMClient()
         self.ledger = PublicationLedger(cfg.state_dir / "publication-ledger.json")
 
@@ -100,6 +108,7 @@ class AutonomousDailyRunner:
         self,
         story_id_override: str | None = None,
         dry_run: bool = False,
+        now_epoch: float | None = None,
     ) -> DailyRunReport:
         """Execute autonomous daily pipeline for one story."""
         store = StateStore(self.cfg.state_dir)
@@ -194,7 +203,32 @@ class AutonomousDailyRunner:
             copy_file = pkg_path / "platform-copy.json"
             copy_file.write_text(json.dumps(copy_output.to_dict(), indent=2))
 
-        # 5. Publication to the 4 targets with explicit auth/blocked states and isolated continuation
+        # 5. Timing & Schedule Persistence:
+        # Check or generate deterministic jittered schedule after video production
+        schedule_file = self.cfg.state_dir / f"{target_story_id}.schedule.json"
+        if schedule_file.exists():
+            try:
+                schedule = PublicationSchedule.from_dict(json.loads(schedule_file.read_text()))
+            except (json.JSONDecodeError, OSError, ValueError, KeyError):
+                schedule = generate_publication_schedule(
+                    target_story_id,
+                    PUBLICATION_TARGETS,
+                    self.timing_policy,
+                    base_epoch=now_epoch,
+                )
+                schedule_file.write_text(json.dumps(schedule.to_dict(), indent=2))
+        else:
+            schedule = generate_publication_schedule(
+                target_story_id,
+                PUBLICATION_TARGETS,
+                self.timing_policy,
+                base_epoch=now_epoch,
+            )
+            schedule_file.write_text(json.dumps(schedule.to_dict(), indent=2))
+
+        report.publication_schedule = schedule.to_dict()
+
+        # 6. Publication to the 4 targets with explicit auth/blocked states and isolated continuation
         publishers = {
             "linkedin": CommandPublisher("linkedin", self.cfg.linkedin_cmd),
             "youtube": CommandPublisher("youtube", self.cfg.youtube_cmd),
@@ -213,6 +247,17 @@ class AutonomousDailyRunner:
                 report.platform_results[target] = {
                     "status": "already_done",
                     "verification": stage_rec.verification,
+                }
+                continue
+
+            # Respect scheduled jitter/delay unless in dry-run simulation mode
+            if not dry_run and not is_target_ready_for_publication(schedule, target, current_epoch=now_epoch):
+                target_sched = schedule.target_schedules.get(target)
+                sched_iso = target_sched.scheduled_iso if target_sched else "future"
+                report.platform_results[target] = {
+                    "status": "waiting_schedule",
+                    "scheduled_at": sched_iso,
+                    "note": f"Deferred until scheduled window {sched_iso} to vary naturally",
                 }
                 continue
 

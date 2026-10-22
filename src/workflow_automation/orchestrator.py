@@ -48,6 +48,7 @@ class DailyRunReport:
     stages_completed: list[str] = field(default_factory=list)
     platform_results: dict[str, dict[str, Any]] = field(default_factory=dict)
     publication_schedule: dict[str, Any] | None = None
+    all_targets_settled: bool = False
     warnings: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
 
@@ -101,8 +102,46 @@ class AutonomousDailyRunner:
     def __init__(self, cfg: Config, timing_policy: TimingPolicy | None = None):
         self.cfg = cfg
         self.timing_policy = timing_policy or TimingPolicy()
-        self.llm = LLMClient()
         self.ledger = PublicationLedger(cfg.state_dir / "publication-ledger.json")
+
+    def _find_active_or_next_story(
+        self,
+        store: StateStore,
+        story_id_override: str | None = None,
+        feedback_path: Path | None = None,
+        llm: LLMClient | None = None,
+    ) -> tuple[dict[str, Any], str]:
+        if story_id_override:
+            chosen = find_story(self.cfg.stories_path, story_id_override)
+            return chosen, f"Manual override to {story_id_override}"
+
+        # First, check if there is an in-flight / unfinished active story for today
+        all_stories = load_stories(self.cfg.stories_path)
+        for s in all_stories:
+            sid = story_id(s)
+            st = store.load(sid)
+            if st and any(v.status not in ("done", "platform_blocked") for v in st.stages.values()):
+                # An active unfinished story exists: resume this story rather than choosing another
+                return s, f"Resuming active in-progress story {sid}"
+
+        # Otherwise, select next pending story
+        pending_candidates = []
+        for s in all_stories:
+            sid = story_id(s)
+            st = store.load(sid)
+            if not st or all(v.status == "pending" for v in st.stages.values()):
+                pending_candidates.append(s)
+
+        if not pending_candidates:
+            raise LookupError("No pending stories in inventory for autonomous selection")
+
+        if llm:
+            selection = llm.select_and_rank_stories(pending_candidates, feedback_path)
+            chosen = find_story(self.cfg.stories_path, selection.selected_story_id)
+            return chosen, selection.rationale
+
+        first = pending_candidates[0]
+        return first, f"Selected first pending candidate {story_id(first)}"
 
     def run_daily_pipeline(
         self,
@@ -110,38 +149,21 @@ class AutonomousDailyRunner:
         dry_run: bool = False,
         now_epoch: float | None = None,
     ) -> DailyRunReport:
-        """Execute autonomous daily pipeline for one story."""
+        """Execute autonomous daily pipeline for one story (or continue active story)."""
         store = StateStore(self.cfg.state_dir)
-
-        # 1. Selection: select next story without human approval
-        all_stories = load_stories(self.cfg.stories_path)
-        pending_candidates = []
-        for s in all_stories:
-            sid = story_id(s)
-            st_path = self.cfg.state_dir / f"{sid}.json"
-            if not st_path.exists():
-                pending_candidates.append(s)
-            else:
-                st = store.load(sid)
-                if st and any(v.status != "done" for v in st.stages.values()):
-                    pending_candidates.append(s)
-
-        if not pending_candidates and not story_id_override:
-            raise LookupError("No pending stories in inventory for autonomous selection")
+        llm = LLMClient(command=self.cfg.llm_cmd, allow_fallback=dry_run)
 
         feedback_path = self.cfg.state_dir / "editorial-feedback.json"
-
-        if story_id_override:
-            chosen_story = find_story(self.cfg.stories_path, story_id_override)
-            selection_rationale = f"Manual override to {story_id_override}"
-        else:
-            selection = self.llm.select_and_rank_stories(pending_candidates, feedback_path)
-            chosen_story = find_story(self.cfg.stories_path, selection.selected_story_id)
-            selection_rationale = selection.rationale
+        chosen_story, selection_rationale = self._find_active_or_next_story(
+            store,
+            story_id_override=story_id_override,
+            feedback_path=feedback_path,
+            llm=llm,
+        )
 
         chosen_story = _hydrate_notebook_source(self.cfg, chosen_story)
         target_story_id = story_id(chosen_story)
-        LOG.info("Selected story: %s (Rationale: %s)", target_story_id, selection_rationale)
+        LOG.info("Selected/active story: %s (Rationale: %s)", target_story_id, selection_rationale)
 
         # Hydrate source information
         source = {}
@@ -151,19 +173,18 @@ class AutonomousDailyRunner:
             except LookupError:
                 LOG.debug("Source %s not found in sources inventory", chosen_story.get("source_id"))
 
-        # 2. Strict structured factual review
-        review = self.llm.review_factual_claims(chosen_story, source)
+        # 2. Strict structured factual review (fail closed in production)
+        review = llm.review_factual_claims(chosen_story, source)
         if not review.approved:
-            LOG.warning("Factual review warning for story %s: %s", target_story_id, review.summary)
+            raise RuntimeError(f"Factual review failed closed for story {target_story_id}: {review.summary}")
 
-        # 3. State management & video production
+        # 3. State management
         state = store.load(target_story_id)
         if not state:
             state = StoryState(story_id=target_story_id, source=chosen_story)
         else:
             state.source = _hydrate_notebook_source(self.cfg, state.source)
 
-        # Prepare Wispr script or narrative text for post-production platform copy
         if "wispr_final_script" not in state.artifacts:
             narrative = str(
                 chosen_story.get("story")
@@ -178,7 +199,20 @@ class AutonomousDailyRunner:
             warnings=list(review.editorial_warnings),
         )
 
-        # Execute extraction and video stages
+        # 4. Generate platform-specific copy early before package and caption generator
+        platform_copy = llm.generate_platform_copy(
+            target_story_id,
+            state.artifacts["wispr_final_script"],
+            source,
+        )
+
+        # Staging directory for copy so caption generator / packaging can consume it
+        handoff_root = self.cfg.content_root / ".handoff" / target_story_id
+        handoff_root.mkdir(parents=True, exist_ok=True)
+        copy_file = handoff_root / "platform-copy.json"
+        copy_file.write_text(json.dumps(platform_copy.to_dict(), indent=2))
+
+        # 5. Execute extraction and video stages
         for stage in ("extracted", "video_queued", "video_produced"):
             rec = state.stages[stage]
             if rec.status != "done":
@@ -191,20 +225,14 @@ class AutonomousDailyRunner:
                     store.save(state)
                     raise
 
-        # 4. Generate platform-specific copy if package created
+        # Ensure platform-copy.json is copied into final package dir
         package_dir_str = state.artifacts.get("package_dir")
         if package_dir_str and Path(package_dir_str).exists():
-            pkg_path = Path(package_dir_str)
-            copy_output = self.llm.generate_platform_copy(
-                target_story_id,
-                state.artifacts["wispr_final_script"],
-                source,
-            )
-            copy_file = pkg_path / "platform-copy.json"
-            copy_file.write_text(json.dumps(copy_output.to_dict(), indent=2))
+            pkg_copy = Path(package_dir_str) / "platform-copy.json"
+            if not pkg_copy.exists():
+                pkg_copy.write_text(json.dumps(platform_copy.to_dict(), indent=2))
 
-        # 5. Timing & Schedule Persistence:
-        # Check or generate deterministic jittered schedule after video production
+        # 6. Timing & Schedule Persistence:
         schedule_file = self.cfg.state_dir / f"{target_story_id}.schedule.json"
         if schedule_file.exists():
             try:
@@ -228,7 +256,7 @@ class AutonomousDailyRunner:
 
         report.publication_schedule = schedule.to_dict()
 
-        # 6. Publication to the 4 targets with explicit auth/blocked states and isolated continuation
+        # 7. Publication to the 4 targets with explicit auth/blocked states and isolated continuation
         publishers = {
             "linkedin": CommandPublisher("linkedin", self.cfg.linkedin_cmd),
             "youtube": CommandPublisher("youtube", self.cfg.youtube_cmd),
@@ -238,14 +266,15 @@ class AutonomousDailyRunner:
 
         pkg_path = Path(package_dir_str) if package_dir_str else (self.cfg.content_root / target_story_id)
 
+        all_settled = True
         for target in PUBLICATION_TARGETS:
             stage_name = TARGET_TO_STAGE[target]
             stage_rec = state.stages[stage_name]
 
-            # Skip if already done
-            if stage_rec.status == "done":
+            # If already done or explicitly blocked, skip
+            if stage_rec.status in ("done", "platform_blocked"):
                 report.platform_results[target] = {
-                    "status": "already_done",
+                    "status": stage_rec.status,
                     "verification": stage_rec.verification,
                 }
                 continue
@@ -274,6 +303,7 @@ class AutonomousDailyRunner:
 
             # Respect scheduled jitter/not-before delay in production mode
             if not is_target_ready_for_publication(schedule, target, current_epoch=now_epoch):
+                all_settled = False
                 report.platform_results[target] = {
                     "status": "waiting_schedule",
                     "not_before": not_before_iso,
@@ -308,10 +338,34 @@ class AutonomousDailyRunner:
                 store.save(state)
                 report.warnings.append(f"Target {target} {res.status}: {res.error}")
             else:
+                all_settled = False
                 stage_rec.status = "failed"
                 stage_rec.error = res.error
                 stage_rec.updated_at = utcnow()
                 store.save(state)
                 report.errors.append(f"Target {target} failed: {res.error}")
 
+        report.all_targets_settled = all_settled if not dry_run else True
         return report
+
+    def watch_until_complete(
+        self,
+        story_id_override: str | None = None,
+        dry_run: bool = False,
+        poll_interval_seconds: int = 30,
+        max_duration_seconds: int = 86400,
+    ) -> DailyRunReport:
+        """Watch and poll active story execution until all targets settle or timeout occurs."""
+        start_time = time.time()
+        while True:
+            report = self.run_daily_pipeline(story_id_override=story_id_override, dry_run=dry_run)
+            if report.all_targets_settled:
+                LOG.info("All targets settled for story %s", report.story_id)
+                return report
+
+            elapsed = time.time() - start_time
+            if elapsed >= max_duration_seconds:
+                LOG.warning("Watch cutoff reached (%ds) for story %s", max_duration_seconds, report.story_id)
+                return report
+
+            time.sleep(poll_interval_seconds)

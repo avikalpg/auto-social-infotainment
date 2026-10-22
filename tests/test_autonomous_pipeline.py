@@ -23,8 +23,8 @@ def test_editorial_feedback_persistence(tmp_path: Path) -> None:
     feedback_file = tmp_path / "editorial-feedback.json"
     assert load_feedback(feedback_file) == []
 
-    append_feedback(feedback_file, {"target": "hook", "note": "Make opening punchier", "weight": "high"})
-    append_feedback(feedback_file, {"target": "pacing", "note": "Shorter sentences", "weight": "medium"})
+    append_feedback(feedback_file, text="Make opening punchier", target="hook", weight="high")
+    append_feedback(feedback_file, text="Shorter sentences", target="pacing", weight="medium")
 
     items = load_feedback(feedback_file)
     assert len(items) == 2
@@ -36,13 +36,13 @@ def test_editorial_feedback_persistence(tmp_path: Path) -> None:
 
 
 def test_llm_story_selection_schema_and_deterministic_ranking(tmp_path: Path) -> None:
-    client = LLMClient()
+    client = LLMClient(allow_fallback=True)
     candidates = [
         {"id": "STR-010", "story": "Story 10"},
         {"id": "STR-011", "story": "Story 11"},
     ]
     feedback_file = tmp_path / "feedback.json"
-    append_feedback(feedback_file, {"note": "Focus on engineering leadership"})
+    append_feedback(feedback_file, text="Focus on engineering leadership")
 
     res = client.select_and_rank_stories(candidates, feedback_file)
     assert isinstance(res, StorySelectionOutput)
@@ -52,7 +52,7 @@ def test_llm_story_selection_schema_and_deterministic_ranking(tmp_path: Path) ->
 
 
 def test_llm_factual_review_and_platform_copy() -> None:
-    client = LLMClient()
+    client = LLMClient(allow_fallback=True)
     story = {
         "id": "STR-010",
         "main_character": "A Staff Engineer",
@@ -138,6 +138,7 @@ def test_orchestrator_dry_run_pipeline(tmp_path: Path) -> None:
         ffprobe_bin="ffprobe",
         ffmpeg_bin="ffmpeg",
         extractor_cmd=None,
+        llm_cmd=None,
         notebooklm_generation_worker_cmd=None,
         notebooklm_worker_cmd=None,
         caption_generator_cmd=None,

@@ -13,10 +13,11 @@ LOG = logging.getLogger("workflow_automation")
 
 
 class LLMClient:
-    """Invokes configured LLM command adapter or deterministic heuristic fallback."""
+    """Invokes configured LLM command adapter or deterministic heuristic fallback in dry-run."""
 
-    def __init__(self, command: tuple[str, ...] | None = None):
+    def __init__(self, command: tuple[str, ...] | None = None, allow_fallback: bool = False):
         self.command = command
+        self.allow_fallback = allow_fallback
 
     def _call_raw(self, payload: dict[str, Any]) -> dict[str, Any]:
         if not self.command:
@@ -56,8 +57,10 @@ class LLMClient:
             res = self._call_raw(payload)
             return StorySelectionOutput.from_dict(res)
 
-        # Deterministic ranking heuristic fallback when no LLM adapter is configured:
-        # Prioritize stories matching feedback themes if any, else pick first available
+        if not self.allow_fallback:
+            raise RuntimeError("LLM adapter command is required for production story selection")
+
+        # Deterministic ranking heuristic fallback for dry-run only
         ranked_ids = [str(s.get("id") or s.get("story_id")) for s in candidate_stories]
         first_id = ranked_ids[0]
         rationale = (
@@ -76,7 +79,7 @@ class LLMClient:
         story: dict[str, Any],
         source: dict[str, Any],
     ) -> FactualReviewOutput:
-        """Perform strict structured factual review of story claims against source."""
+        """Perform strict structured factual review of story claims against source. Fail closed in production."""
         if self.command:
             payload = {
                 "task": "factual_review",
@@ -86,8 +89,10 @@ class LLMClient:
             res = self._call_raw(payload)
             return FactualReviewOutput.from_dict(res)
 
-        # Deterministic verification fallback:
-        # Verify key character/tension presence
+        if not self.allow_fallback:
+            raise RuntimeError("LLM adapter command is required for production factual review")
+
+        # Dry-run deterministic verification
         story_text = str(story.get("story") or story.get("title") or "")
         char = str(story.get("main_character") or "")
         tension = str(story.get("primary_tension") or "")
@@ -148,7 +153,10 @@ class LLMClient:
             res = self._call_raw(payload)
             return PlatformCopyOutput.from_dict(res)
 
-        # High-quality deterministic fallback:
+        if not self.allow_fallback:
+            raise RuntimeError("LLM adapter command is required for production platform copy generation")
+
+        # High-quality deterministic fallback for dry-run
         src_title = str(source.get("title") or "Source Study")
         src_url = str(source.get("url") or source.get("source_url") or "")
         hashtags = [

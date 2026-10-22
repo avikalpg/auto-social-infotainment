@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import Any
 
@@ -20,14 +21,28 @@ def load_feedback(path: Path) -> list[dict[str, Any]]:
     return []
 
 
-def append_feedback(path: Path, entry: dict[str, Any]) -> None:
-    """Safely append an editorial feedback entry."""
+def append_feedback(
+    path: Path,
+    text: str,
+    story_id: str | None = None,
+    target: str = "general",
+    weight: str = "neutral",
+) -> dict[str, Any]:
+    """Safely append an editorial feedback entry with timestamp, story_id, and text."""
+    entry = {
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "story_id": story_id,
+        "text": text.strip(),
+        "target": target.strip(),
+        "weight": weight.strip(),
+    }
     existing = load_feedback(path)
     existing.append(entry)
     path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = path.with_suffix(".tmp")
     temp_path.write_text(json.dumps(existing, indent=2, sort_keys=True))
     temp_path.replace(path)
+    return entry
 
 
 def summarize_feedback_for_prompt(feedback_items: list[dict[str, Any]]) -> str:
@@ -36,8 +51,9 @@ def summarize_feedback_for_prompt(feedback_items: list[dict[str, Any]]) -> str:
         return "None recorded."
     lines = []
     for idx, item in enumerate(feedback_items, 1):
-        note = item.get("note") or item.get("feedback") or item.get("comment") or str(item)
+        note = item.get("text") or item.get("note") or item.get("feedback") or item.get("comment") or str(item)
         target = item.get("target") or item.get("category") or "general"
         weight = item.get("weight") or item.get("sentiment") or "neutral"
-        lines.append(f"{idx}. [{target.upper()}] ({weight}): {note}")
+        sid = f" (Story: {item.get('story_id')})" if item.get("story_id") else ""
+        lines.append(f"{idx}. [{target.upper()}]{sid} ({weight}): {note}")
     return "\n".join(lines)

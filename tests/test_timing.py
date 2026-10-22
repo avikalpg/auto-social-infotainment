@@ -100,6 +100,7 @@ def test_orchestrator_timing_schedule_persistence(tmp_path: Path) -> None:
         ffprobe_bin="ffprobe",
         ffmpeg_bin="ffmpeg",
         extractor_cmd=None,
+        llm_cmd=None,
         notebooklm_generation_worker_cmd=None,
         notebooklm_worker_cmd=None,
         caption_generator_cmd=None,
@@ -126,3 +127,57 @@ def test_orchestrator_timing_schedule_persistence(tmp_path: Path) -> None:
     sched2 = json.loads(sched_file.read_text())
     assert sched1["ready_epoch"] == sched2["ready_epoch"]
     assert sched1["target_schedules"]["linkedin"]["not_before_epoch"] == sched2["target_schedules"]["linkedin"]["not_before_epoch"]
+
+def test_watch_until_complete_and_active_story_resume(tmp_path: Path) -> None:
+    sources_file = tmp_path / "sources.json"
+    sources_file.write_text(json.dumps([
+        {"id": "SRC-001", "title": "Source 1", "notebook_url": "https://notebook.google.com/notebook/test1"},
+        {"id": "SRC-002", "title": "Source 2", "notebook_url": "https://notebook.google.com/notebook/test2"},
+    ]))
+
+    stories_file = tmp_path / "stories.json"
+    stories_file.write_text(json.dumps([
+        {"id": "STR-001", "source_id": "SRC-001", "artifact_title": "Art 1", "focus_prompt": "Prompt 1", "story": "Story 1"},
+        {"id": "STR-002", "source_id": "SRC-002", "artifact_title": "Art 2", "focus_prompt": "Prompt 2", "story": "Story 2"},
+    ]))
+
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    downloads_dir = tmp_path / "downloads"
+    downloads_dir.mkdir()
+    req_dir = downloads_dir / "notebooklm-requests"
+    req_dir.mkdir()
+    content_root = tmp_path / "content"
+    content_root.mkdir()
+
+    cfg = Config(
+        project_root=tmp_path,
+        sources_path=sources_file,
+        stories_path=stories_file,
+        content_root=content_root,
+        state_dir=state_dir,
+        lock_path=state_dir / "workflow.lock",
+        ffprobe_bin="ffprobe",
+        ffmpeg_bin="ffmpeg",
+        extractor_cmd=None,
+        llm_cmd=None,
+        notebooklm_generation_worker_cmd=None,
+        notebooklm_worker_cmd=None,
+        caption_generator_cmd=None,
+        instagram_cmd=None,
+        x_cmd=None,
+        youtube_cmd=None,
+        linkedin_cmd=None,
+        notebooklm_request_dir=req_dir,
+        notebooklm_output_root=downloads_dir,
+    )
+
+    runner = AutonomousDailyRunner(cfg)
+    report = runner.watch_until_complete(dry_run=True, poll_interval_seconds=1, max_duration_seconds=5)
+    assert report.story_id == "STR-001"
+    assert report.all_targets_settled is True
+
+    # Check that a subsequent run resumes the active unfinished story if not all settled, or picks next
+    report2 = runner.run_daily_pipeline(dry_run=True)
+    # STR-001 was simulated as dry_run, so STR-001 remains the active story
+    assert report2.story_id == "STR-001"

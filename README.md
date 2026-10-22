@@ -113,3 +113,26 @@ Content packages contain `manifest.json`, `caption.md`, `publication-status.json
 After Wispr has produced the final script, its integration stores the text in `state.artifacts.wispr_final_script`. `produce-video` then writes a strict caption-generator request and invokes `caption_generator_cmd`. The request contains only that final script plus available `source_title`, `source_url`, `primary_subject`, `main_character`, and `primary_tension` context, then asks the generator to write platform copy to `output_path`. A story must not provide `caption` or `caption_markdown` before video generation.
 
 The ffmpeg outro utility supports exactly one source audio stream. It replaces the final visual seconds of the source programme with the silent branded outro instead of appending extra runtime, while preserving the complete original audio stream. It fails unless decoded canonical PCM SHA-256, stable audio codec properties, audio duration, audio start and end times, and the audio-to-video start offset match. For the supported AAC-in-MP4 production matrix, compressed packet SHA-256 must also match; for other media it records that the packet-byte check was skipped rather than treating container-specific reframing as corruption.
+
+## Autonomous Daily Pipeline
+
+`workflow-automation-daily` orchestrates the fully autonomous daily social video lifecycle.
+
+### Capabilities and Invariants
+- **Autonomous Story Selection**: Evaluates pending candidate stories against cumulative non-blocking editorial feedback (`state/editorial-feedback.json`) without requiring human approval gates.
+- **Strict Structured LLM Outputs**: Generates typed JSON schemas for story selection, factual review (fail closed in production), and early platform copy (`linkedin`, `youtube`, `instagram`, `x`).
+- **Completion-Driven Timing & Randomized Jitter**:
+  - No fixed daily posting timestamp or artificial deadline. Publishing windows trigger naturally when video generation and outro replacement complete.
+  - Bounded initial jitter (5–30 min) and staggered intervals (3–15 min) between platforms, recorded as explicit `not_before` timestamps.
+  - Schedulers persist state in `state/<story_id>.schedule.json` with deterministic seeds so retries or restarts reload the exact same schedule and do not re-randomize.
+- **Non-blocking Target Resilience**:
+  - Unconfigured or disconnected browser targets enter explicit `platform_blocked` or `needs_human_auth` states without halting eligible platforms.
+  - In production autonomous runs, all 4 publisher commands (`linkedin_cmd`, `youtube_cmd`, `instagram_cmd`, `x_cmd`), `llm_cmd`, workers, and `branded_outro_path` are required by config validation. Dry runs permit simulation.
+- **Tick & Watch Execution**:
+  - Standalone daily invocation: `workflow-automation-daily --config config.json` executes or ticks the active story, publishing targets whose `not_before` time has arrived.
+  - Watch mode: `workflow-automation-daily --config config.json --watch-until-complete [--poll-interval-seconds 30]` polls and resumes the same in-flight active story until all targets settle or the day cutoff is reached.
+- **Editorial Feedback CLI**:
+  - Safe atomic feedback insertion:
+    ```bash
+    workflow-automation-daily --config config.json --add-feedback "Make hook punchier and emphasize engineering tradeoffs" --feedback-story-id STR-008 --feedback-target hook --feedback-weight high
+    ```

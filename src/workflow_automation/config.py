@@ -21,6 +21,7 @@ class Config:
     ffprobe_bin: str
     ffmpeg_bin: str
     extractor_cmd: tuple[str, ...] | None
+    llm_cmd: tuple[str, ...] | None
     notebooklm_generation_worker_cmd: tuple[str, ...] | None
     notebooklm_worker_cmd: tuple[str, ...] | None
     caption_generator_cmd: tuple[str, ...] | None
@@ -78,6 +79,7 @@ class Config:
             val("ffprobe_bin", "ffprobe"),
             val("ffmpeg_bin", "ffmpeg"),
             cmd("extractor"),
+            cmd("llm"),
             cmd("notebooklm_generation_worker"),
             cmd("notebooklm_worker"),
             cmd("caption_generator"),
@@ -92,13 +94,39 @@ class Config:
             int(val("max_retries", "3")),
         )
 
-    def validate(self, *, stage: str | None = None, dry_run: bool = False) -> list[str]:
+    def validate(
+        self,
+        *,
+        stage: str | None = None,
+        dry_run: bool = False,
+        autonomous: bool = False,
+    ) -> list[str]:
         errors = []
         for p in (self.sources_path, self.stories_path):
             if not p.exists():
                 errors.append(f"missing configured path: {p}")
         if self.max_retries < 1 or self.max_retries > 10:
             errors.append("max_retries must be between 1 and 10")
+
+        if autonomous and not dry_run:
+            # Production autonomous mode requires LLM, NotebookLM, caption generator, and all 4 publishers
+            required_cmds = {
+                "llm_cmd": self.llm_cmd,
+                "notebooklm_generation_worker_cmd": self.notebooklm_generation_worker_cmd,
+                "notebooklm_worker_cmd": self.notebooklm_worker_cmd,
+                "caption_generator_cmd": self.caption_generator_cmd,
+                "linkedin_cmd": self.linkedin_cmd,
+                "youtube_cmd": self.youtube_cmd,
+                "instagram_cmd": self.instagram_cmd,
+                "x_cmd": self.x_cmd,
+            }
+            for cmd_name, cmd_val in required_cmds.items():
+                if not cmd_val:
+                    errors.append(f"{cmd_name} must be configured for production autonomous workflow")
+
+            if not self.branded_outro_path or not self.branded_outro_path.is_file():
+                errors.append("branded_outro_path must reference an existing file for production autonomous workflow")
+
         if dry_run or stage not in {"video_queued", "video_produced"}:
             return errors
 

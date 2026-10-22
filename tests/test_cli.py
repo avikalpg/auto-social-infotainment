@@ -36,3 +36,11 @@ def test_global_dry_run_still_applies_before_the_subcommand() -> None:
     ):
         assert main(["--dry-run", "queue-video", "--story-id", "STR-001"]) == 0
         assert command_stage.call_args.args[0].dry_run is True
+
+def test_daily_runner_cli_help() -> None:
+    import pytest
+
+    from workflow_automation.daily_runner import main
+    with pytest.raises(SystemExit) as exc:
+        main(["--help"])
+    assert exc.value.code == 0
